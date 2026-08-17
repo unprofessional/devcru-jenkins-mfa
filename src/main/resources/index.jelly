@@ -1,0 +1,4 @@
+<?jelly escape-by-default='true'?>
+<div>
+    TOTP (Authy-compatible) and email-code MFA with long remembered devices. Self-hosted, no paywall.
+</div>

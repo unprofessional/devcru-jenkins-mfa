@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.jenkins-ci.plugins</groupId>
+    <artifactId>plugin</artifactId>
+    <version>6.2116.v7501b_67dc517</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>org.sebcru.mfa</groupId>
+  <artifactId>devcru-mfa</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+  <packaging>hpi</packaging>
+
+  <name>Devcru MFA</name>
+  <description>TOTP (Authy-compatible) and email-code MFA with long remembered devices. Self-hosted, no paywall.</description>
+  <url>https://github.com/unprofessional/devcru-jenkins-mfa</url>
+
+  <scm>
+    <connection>scm:git:git@github.com:unprofessional/devcru-jenkins-mfa.git</connection>
+    <developerConnection>scm:git:git@github.com:unprofessional/devcru-jenkins-mfa.git</developerConnection>
+    <url>https://github.com/unprofessional/devcru-jenkins-mfa</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <properties>
+    <jenkins.version>2.528.3</jenkins.version>
+    <changelist>999999-SNAPSHOT</changelist>
+    <zxing.version>3.5.3</zxing.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.jenkins.tools.bom</groupId>
+        <artifactId>bom-2.528.x</artifactId>
+        <version>6055.v35edb_dc8d0f9</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>core</artifactId>
+      <version>${zxing.version}</version>
+    </dependency>
+    <!-- No TOTP lib: core implements RFC 6238.
+         commons-codec (Base32) + jakarta.mail are in Jenkins core. -->
+  </dependencies>
+
+  <repositories>
+    <repository>
+      <id>repo.jenkins-ci.org</id>
+      <url>https://repo.jenkins-ci.org/public/</url>
+    </repository>
+  </repositories>
+  <pluginRepositories>
+    <pluginRepository>
+      <id>repo.jenkins-ci.org</id>
+      <url>https://repo.jenkins-ci.org/public/</url>
+    </pluginRepository>
+  </pluginRepositories>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <configuration>
+          <rules>
+            <enforceBytecodeVersion>
+              <maxJdkVersion>21</maxJdkVersion>
+            </enforceBytecodeVersion>
+          </rules>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
