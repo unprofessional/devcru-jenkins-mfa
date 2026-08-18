@@ -51,13 +51,24 @@
       <artifactId>core</artifactId>
       <version>${zxing.version}</version>
     </dependency>
+    <!-- Email one-time-code delivery: hudson.tasks.Mailer (SMTP session + SMTP
+         config) + jakarta.mail. Version managed by the bom-2.528.x BOM import
+         above. This is the standard Jenkins Mailer plugin — pre-installed on any
+         real Jenkins install (it is how Jenkins mails build results), declared
+         compile-scoped so the sender compiles; it ships with the target
+         instance, it is not "bundled" by our .hpi. -->
+    <dependency>
+      <groupId>org.jenkins-ci.plugins</groupId>
+      <artifactId>mailer</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
     <!-- No TOTP lib: core implements RFC 6238.
-         commons-codec (Base32) + jakarta.mail are in Jenkins core. -->
+         commons-codec (Base32) is in Jenkins core.
+         JSON responses use net.sf.json (json-lib), in core. -->
   </dependencies>
 
   <repositories>

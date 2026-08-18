@@ -9,24 +9,57 @@ paywalled UI) on `jenkins.devcru.org` (Jenkins 2.577, Local Security Realm).
 
 ## Status
 
-Tasks 0–5 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
+Tasks 0–6 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
 RFC 4226/6238 vectors), per-user factor state, the email-code factor
 (generation, hashing, single-use, expiry, resend throttle), the two gate
 brains — the remembered-device trust (24 h policy floor) and the per-user
 rate limiter / lockout (sliding 30-minute failure window, 5 attempts,
-15-minute lockout that cannot be extended by retries) — and the admin
+15-minute lockout that cannot be extended by retries) — the admin
 configuration surface (Manage Jenkins → Security: policy, issuer, trust
-windows, rate-limit knobs, exempt users). The login gate, enrolment/
-management UI, and mail delivery wiring land per the plan
-(`docs/plans/2026-08-17-jenkins-mfa-plugin.md`).
+windows, rate-limit knobs, exempt users), and the MFA controller: the login
+the login screen at `/securityRealm/mfa` with its two POST endpoints (TOTP or email
+code verification, and email-code resend via Jenkins' standard Mailer), the
+shape-based factor router, the open-redirect-safe "back to where you were"
+redirect resolver, and session fix-up on success. The redirect resolver's
+decision table is unit-tested; the endpoint glue is covered by the Task 8
+integration test. The login gate filter (interception), enrolment/
+management UI, and end-to-end mail round trips land per the plan in this
+repo ([`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md)).
+
+Two Task 6 deviations from the plan sketch, both flagged in the commit and
+in the code: (1) the controller mounts as a `hudson.model.RootAction`
+because `jenkins.model.GlobalAction` does not exist in the resolved
+2.528.3 core, and (2) `postResendEmail` takes no destination parameter —
+codes go to the account's registered mailbox and only there, so the
+resend button cannot be turned into an open mail relay.
+
+## Project documentation (in this repo)
+
+All project docs live under [`docs/`](docs/): `docs/plans/` holds
+implementation plans, `docs/todo/` active work notes, `docs/done/` stale
+docs with historical reference, and
+[`docs/architecture/`](docs/architecture/README.md) the
+architecture & design-decision record used to audit the code.
+
+| File | What it is |
+|---|---|
+| [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
+| [`docs/todo/2026-08-18-task7-handoff.md`](docs/todo/2026-08-18-task7-handoff.md) | Fresh-session handoff note for Task 7 (the gate filter): where the build stands after Task 6, the re-verified 2.528.3-core API findings (incl. three corrections to the plan sketch — no `JenkinsUtil`, `jenkins.security.*` package, jakarta-only filter), the existing seams, and the execution order. |
+| [`docs/architecture/`](docs/architecture/README.md) | Architecture & design-decision record (abstractions, state-management boundaries, Jenkins integration surface, auth/security seams). The audit companion. |
+| [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A14, with status/owner per item). Rulings from mads recorded 2026-08-18: `current()` is authoritative (A1), both minting paths for `emailCodeSecret` (A2), `?redirect=` canonical over `Referer` (A3), Task 9 consumes-and-resets the telemetry fields (A7/A8). |
+
 
 ## Practical usage — what end users should expect
 
-> The TOTP engine, per-user state, and the email-code factor
-> (generation, hashing, single-use, expiry, resend) are implemented and
-> tested. The login gate, enrolment/management UI, and the mail delivery
-> wiring land per the plan. Descriptions of login flow are the committed
-> behaviour contract, not yet-shipped screenshots.
+> The TOTP engine, per-user state, the email-code factor (generation,
+> hashing, single-use, expiry, resend, and auto-provisioned per-user HMAC
+> key), the two gate brains, the admin settings, and the MFA login screen
+> with its verify/resend endpoints are implemented and tested; mail codes
+> are delivered through the standard Jenkins Mailer (global SMTP config)
+> once that plugin — preinstalled on any real instance — is present. The
+> automatic login interception (Task 7) and the enrollment/management UI
+> (Task 9) still land per the plan, so the flow described below is the
+> committed behaviour contract, not a shipped screen yet.
 
 ### Enrolling
 
@@ -47,9 +80,13 @@ management UI, and mail delivery wiring land per the plan
   every 30 seconds) or an 8-character email-delivered one-time code.
 - **Codes are always mailed to the registered mailbox on the account** —
   never to an address an attacker can point them at.
-- **Remembered devices:** a successful MFA keeps the browser trusted for the
-  configured window (default 30 days, never shorter than 24 h), so the code
-  is not re-demanded on every visit. API tokens are exempt — CI keeps working.
+- **Remembered devices:** a successful MFA keeps *this login* trusted for the
+  session's lifetime (no per-request re-verification — the code is not
+  re-demanded on every page load), and it *remembers the browser* for the
+  configured window (default 30 days, never shorter than 24 h): a *future*
+  login from that browser inside the window skips the code. Logging out ends
+  the first; the window expiring ends the second. API tokens are exempt —
+  CI keeps working.
 
 ### Corner cases, and how they are handled
 
@@ -129,8 +166,11 @@ management UI, and mail delivery wiring land per the plan
 
 - The TOTP seed, the per-user email-code HMAC key, and the pending-code
   hash are stored **encrypted at rest** with the Jenkins master key — not
-  readable from `config.xml` even by someone with filesystem access.
-  Email codes themselves never touch disk.
+  readable from `config.xml` even by someone with filesystem access.  The
+  per-user HMAC key is auto-provisioned on first email use when it does not
+  yet exist (a fresh 128-bit random value, minted once and never reused), so
+  every account hashes its codes under its own key rather than a shared
+  default. Email codes themselves never touch disk.
 - The registered mailbox is stored in plain text on purpose: it is a
   delivery address, not a credential, and an admin investigating a lockout
   should be able to see it.

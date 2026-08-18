@@ -72,6 +72,6 @@ present in that file (TotpTest is the house standard).
 - TDD throughout: the plan's independent oracles (RFC vectors, published
   examples, known-good fixtures) beat internal-consistency tests whenever
   one exists.
-- Security decisions live in the plan (`/home/hunter/docs/plans/2026-08-17-jenkins-mfa-plugin.md`,
+- Security decisions live in the plan ([`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md),
   "Security model decisions") — implement them as written; re-litigating them
   in a diff is out of scope.
