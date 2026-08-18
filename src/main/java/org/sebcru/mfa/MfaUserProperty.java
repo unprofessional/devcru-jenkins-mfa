@@ -32,12 +32,14 @@ import org.kohsuke.stapler.DataBoundSetter;
  * narrowed to the two <em>user-facing factor</em> fields only
  * ({@link #setTotpSecret}, {@link #setRegisteredEmail}). The remaining
  * fields ({@code trustedUntilMs}, {@code lastVerifiedFactor},
- * {@code failedAttemptStreak}) are <strong>server-managed</strong> trust /
- * telemetry state: if they were data-bound, the user's security-profile form
- * could forge a 30-day trust expiry or zero out the attempt counter by
- * submitting a crafted page. They are exposed as plain getters/setters for
- * the gate and the RateLimiter to use, but are not reachable from form
- * binding.
+ * {@code failedAttemptStreak}, and the email-code state
+ * {@code pendingCodeHash}/{@code codeIssuedAt}/{@code lastResendAt}) are
+ * <strong>server-managed</strong> trust / telemetry / secret state: if they
+ * were data-bound, the user's security-profile form could forge a 30-day
+ * trust expiry, zero out the attempt counter, or submit a crafted pending
+ * hash. They are exposed as plain getters/setters for the gate, the
+ * RateLimiter, and {@code EmailCodeIssuer} to use, but are not reachable
+ * from form binding.
  */
 public class MfaUserProperty extends UserProperty {
 
@@ -53,6 +55,12 @@ public class MfaUserProperty extends UserProperty {
   private long lastVerifiedFactor;
   /** Consecutive failures, for UI display; the real limit lives in RateLimiter. */
   private int failedAttemptStreak;
+  /** Hash of the currently pending email code; null = none pending. */
+  private Secret pendingCodeHash;
+  /** Epoch ms the pending email code was issued; 0 = none pending. */
+  private long codeIssuedAt;
+  /** Epoch ms of the last code issue/resend (drives the resend cooldown). */
+  private long lastResendAt;
 
   /** No-arg constructor for XStream deserialization and direct construction. */
   public MfaUserProperty() {
@@ -139,6 +147,33 @@ public class MfaUserProperty extends UserProperty {
 
   public void setFailedAttemptStreak(int failedAttemptStreak) {
     this.failedAttemptStreak = failedAttemptStreak;
+  }
+
+  // ---- Email one-time-code state (server-managed, NOT data-bound) ----
+
+  public Secret getPendingCodeHash() {
+    return pendingCodeHash;
+  }
+
+  /** Server-managed: written by {@code EmailCodeIssuer} (issue/resend) only. */
+  public void setPendingCodeHash(Secret pendingCodeHash) {
+    this.pendingCodeHash = pendingCodeHash;
+  }
+
+  public long getCodeIssuedAt() {
+    return codeIssuedAt;
+  }
+
+  public void setCodeIssuedAt(long codeIssuedAt) {
+    this.codeIssuedAt = codeIssuedAt;
+  }
+
+  public long getLastResendAt() {
+    return lastResendAt;
+  }
+
+  public void setLastResendAt(long lastResendAt) {
+    this.lastResendAt = lastResendAt;
   }
 
   @Extension
