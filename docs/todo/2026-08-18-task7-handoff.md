@@ -2,8 +2,8 @@
 
 **Written by Sebastian, 2026-08-18, after Task 6 landed as `f705ea3` on `develop` (CI green).**
 Status: Tasks 0–6 complete, tested, pushed. mads's next "proceed" is for **Task 7**.
-If you're reading this after a context reset: nothing is committed in the working tree
-(repo clean at the reset point) — start from the plan, not from memory.
+If you're reading this after a context reset: the repo is clean — start from the
+plan, not from memory.
 
 ## The rule that governs this whole build (mads)
 
@@ -20,8 +20,8 @@ If you're reading this after a context reset: nothing is committed in the workin
 
 ## Where we are
 
-- Branch `develop` at `f705ea3` (`feat(controller): MFA login page + verify/resend
-  endpoints (Task 6)`), CI green. Repo clean.
+- Branch `develop` at `825c3a3` (`feat(controller): lazy-mint per-user
+  email-code HMAC key (closes A2 gap)`), CI green. Repo clean.
 - Plan (in-repo): [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](../plans/2026-08-17-jenkins-mfa-plugin.md)
   — **Task 7 section ≈ lines 531–565**. Read it first thing.
 - **Tech-debt / audit list: [`docs/todo/TECH_DEBT.md`](TECH_DEBT.md)** — the 2026-08-18
@@ -31,13 +31,22 @@ If you're reading this after a context reset: nothing is committed in the workin
   reconcile the `DevcruMfaConfig` javadoc in the same commit), **A3**
   (`?redirect=` query parameter is canonical over `Referer`; one pure
   `resolveRedirectTarget` for both), **A5** (the Task 8 IT must assert the
-  end-to-end pre-login redirect, not just a safe target).
+  end-to-end pre-login redirect, not just a safe target). **A2 is LANDED**
+  (controller lazy-mint, commit `825c3a3`); only its Task 9 half (enrolment-UI
+  minting) remains — the filter does not touch it. **A7/A8 ruled**: Task 9
+  consumes the telemetry and the clear-path resets the streak.
+- Architecture record: [`docs/architecture/README.md`](../architecture/README.md) —
+  the audit companion (abstractions, state-management domains, §3 end-to-end
+  flow, §7 integration surface, §9 recorded deviations). Read §2 + §7 before
+  wiring the filter.
 - Tasks landed so far (all in `git log` on develop): 0 scaffold · 1 `Totp` (RFC 6238) ·
   2 `MfaUserProperty` · 3 `EmailCodeIssuer`+`EmailSender` · 4 `TrustStore`+`RateLimiter`
   · 5 `DevcruMfaConfig` (GlobalConfiguration + admin jelly) · 6 `MfaController` (login
   page at `/securityRealm/mfa`, `postVerify`, `postResendEmail`, pure seams:
-  `resolveRedirectTarget`, `classifyFactor`, `maskEmail`, `VerifyOutcome`) +
-  `JenkinsEmailSender` (Mailer plugin) + `index.jelly`. 52 tests, SpotBugs clean.
+  `resolveRedirectTarget`, `classifyFactor`, `maskEmail`, `ensureEmailCodeSecret`,
+  `VerifyOutcome`) + `JenkinsEmailSender` (Mailer plugin) + `index.jelly` ·
+  A2 lazy-mint pass (the first email use mints and persists each user's HMAC key).
+  53 tests, SpotBugs clean.
 - Task 6's two deviations are **settled** (recorded in commit `f705ea3` + README):
   (1) controller mounts as `hudson.model.RootAction` because `jenkins.model.GlobalAction`
   does not exist in core 2.528.3; (2) `postResendEmail` takes no `dest` parameter —
@@ -50,9 +59,10 @@ If you're reading this after a context reset: nothing is committed in the workin
 - Replace: `src/main/java/org/sebcru/mfa/DevcruMfaPlugin.java` (currently a 10-line
   `@Extension` stub from Task 0)
 
-**Decision chain (exact order, per plan lines 550–560):**
+**Decision chain (exact order, per plan lines 550–560; A1 ruling applied —
+all runtime config reads go through `current()`, not `get()`):**
 0. `off()` → pass (kill switch: `"1".equals(System.getenv("DEVCRU_MFA_OFF"))`
-   OR `DevcruMfaConfig.get().getPolicy() == Policy.OFF`) — checked FIRST.
+   OR `DevcruMfaConfig.current().getPolicy() == Policy.OFF`) — checked FIRST.
 1. Not an `HttpServletRequest` → pass.
 2. API-token request → pass (see verified detection below — plan's `JenkinsUtil`
    idiom is wrong for this core).
@@ -147,8 +157,15 @@ Also verified in Task 6 (still true): `User.current()`, `User.get2(Authenticatio
   Task 6 instantiated one; filter needs its own instance or a package constant.)
 - `org.sebcru.mfa.gate.RateLimiter` — `isLocked/retrySeconds/recordFailure/clear/
   recentFailures` (all instance + `name, cfg, now` args).
-- `org.sebcru.mfa.DevcruMfaConfig` — `get()` = persisted instance (task-6-fixed:
-  plan said `current()`; both exist, `get()` is null-safe), `Policy.OFF/REQUIRED`,
+- `org.sebcru.mfa.DevcruMfaConfig` — **A1 ruling (2026-08-18): `current()` is
+  authoritative for ALL runtime reads** (filter and controller); `get()` is
+  only the null-safe fallback `current()` already uses when the descriptor
+  is absent (tests/pre-startup). Do NOT wire the filter on `get()` — that
+  was the pre-ruling note and it would reintroduce the config-instance
+  duality the ruling kills. **While wiring, reconcile the
+  `DevcruMfaConfig` class javadoc in the same commit** (house rule: an
+  enforcement layer landing must fix stale "single source of truth" claims
+  that contradict the enforced behaviour). `Policy.OFF/REQUIRED`,
   `getPolicy()`, `isUserExempt(name)`.
 - `org.sebcru.mfa.email.*` — not needed by the filter.
 - `DevcruMfaPlugin.java` — 10-line `@Extension` stub; replace entirely.
