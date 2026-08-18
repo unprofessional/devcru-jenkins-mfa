@@ -9,13 +9,15 @@ paywalled UI) on `jenkins.devcru.org` (Jenkins 2.577, Local Security Realm).
 
 ## Status
 
-Tasks 0–4 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
+Tasks 0–5 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
 RFC 4226/6238 vectors), per-user factor state, the email-code factor
-(generation, hashing, single-use, expiry, resend throttle), and the two
-gate brains — the remembered-device trust (24 h policy floor) and the
-per-user rate limiter / lockout (sliding 30-minute failure window, 5
-attempts, 15-minute lockout that cannot be extended by retries). The login
-gate, enrolment/management UI, and mail delivery wiring land per the plan
+(generation, hashing, single-use, expiry, resend throttle), the two gate
+brains — the remembered-device trust (24 h policy floor) and the per-user
+rate limiter / lockout (sliding 30-minute failure window, 5 attempts,
+15-minute lockout that cannot be extended by retries) — and the admin
+configuration surface (Manage Jenkins → Security: policy, issuer, trust
+windows, rate-limit knobs, exempt users). The login gate, enrolment/
+management UI, and mail delivery wiring land per the plan
 (`docs/plans/2026-08-17-jenkins-mfa-plugin.md`).
 
 ## Practical usage — what end users should expect
@@ -108,6 +110,20 @@ gate, enrolment/management UI, and mail delivery wiring land per the plan
 - **Lost everything (lost phone and mailbox).** Documented admin recovery
   path clears the user's stored factor state; the user re-enrolls. No
   self-service reset, by design.
+- **Every knob an admin touches is clamped, not trusted.** The settings
+  page enforces floors at save time: the trust floor can never be stored
+  below 24 h even if a lower number is typed in, and tuning knobs (window,
+  lockout, code TTL, resend cooldown, attempt limit) cannot be stored as 0 —
+  a zero would silently disable the protection that field provides
+  ("0-second code lifetime" = "no email code ever works"). The 24 h trust
+  floor is enforced twice — here at the knob, and again at grant time in
+  the trust store — so the guarantee holds on the normal admin path and
+  cannot be weakened by a single mis-entered value.
+- **Disabling the whole gate is a setting, not an uninstall.** The policy
+  select on the same page offers OFF as a kill switch: the filter goes
+  inert, nobody is gated, and the plugin stays installed and configured
+  for the fix-forward (plus the `DEVCRU_MFA_OFF=1` env var for incidents
+  where even the config page is unreachable).
 
 ### Storage and privacy
 

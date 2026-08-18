@@ -7,13 +7,24 @@ import org.sebcru.mfa.MfaUserProperty;
  * Remembered-device ("remember me") trust for the MFA gate.
  *
  * <p>The policy: a successful MFA check marks the user's trust as valid
- * until {@code now + max(rememberForHours, trustMinHours)}. Nothing below
- * the floor is ever granted, no matter what the admin configured the
- * remember window to, so "remember for 1 h" cannot silently degrade a
- * user's security posture. The floor is enforced in exactly one place —
- * here — so the Task 7 filter, the Task 9 "revoke remembered devices"
- * button, and the admin-recovery path all share one definition of "how
- * long a trust lasts."
+ * until {@code now + max(rememberForHours, trustMinHours)}. This is the
+ * <em>grant-time</em> enforcement of the trust floor: whatever the admin
+ * set the remember window to, it is never granted below {@code
+ * trustMinHours}. A <em>second</em> layer (added in Task 5, in
+ * {@code DevcruMfaConfig#configure()}) clamps the {@code trustMinHours}
+ * knob itself to at least 24 h at save time, so the admin's UI cannot
+ * lower the floor knob below the plan's signed minimum. Together the two
+ * layers mean: a successful MFA never grants trust below 24 h under
+ * normal admin operation, and the "remember for 1 h" knob cannot silently
+ * degrade a user's security posture. (A config.xml edit that bypasses the
+ * UI to set {@code trustMinHours < 24} would still be limited by the
+ * grant-time max() to whatever the admin-set value is — a defence-in-depth
+ * limitation, not a gap in the normal admin path.)
+ *
+ * <p>This is the canonical "how long does a trust last" arithmetic. The
+ * Task 7 filter, the Task 9 "revoke remembered devices" button, and the
+ * admin-recovery path all share one definition — there is no per-request
+ * expiry of an active session (the exact UX sin of the old plugin).
  *
  * <p>All methods take an explicit {@code now} (ms epoch). There is no
  * hidden {@code System.currentTimeMillis()} call anywhere in this class,
