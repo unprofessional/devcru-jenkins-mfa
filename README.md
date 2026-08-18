@@ -9,9 +9,13 @@ paywalled UI) on `jenkins.devcru.org` (Jenkins 2.577, Local Security Realm).
 
 ## Status
 
-Tasks 0–2 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
-RFC 4226/6238 vectors), and per-user factor state. The login gate,
-enrolment/management UI, and email-code factor land per the plan
+Tasks 0–4 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
+RFC 4226/6238 vectors), per-user factor state, the email-code factor
+(generation, hashing, single-use, expiry, resend throttle), and the two
+gate brains — the remembered-device trust (24 h policy floor) and the
+per-user rate limiter / lockout (sliding 30-minute failure window, 5
+attempts, 15-minute lockout that cannot be extended by retries). The login
+gate, enrolment/management UI, and mail delivery wiring land per the plan
 (`docs/plans/2026-08-17-jenkins-mfa-plugin.md`).
 
 ## Practical usage — what end users should expect
@@ -58,9 +62,20 @@ enrolment/management UI, and email-code factor land per the plan
   a phone's autocorrect doing it) does not produce a wrong code.
 - **Wrong, short, or garbled input.** Rejected cleanly as a wrong code —
   never a stack trace or a 500 on the login path. (Verification compares in
-  constant time; there is no timing side channel to probe.) Failed attempts
-  will count toward per-user rate limiting and temporary lockout
-  (5 attempts / 15 min by default) — landing with Task 4.
+  constant time; there is no timing side channel to probe.) The rate limit
+  counts *dense* bursts, not bad days: 5 wrong codes inside any rolling
+  30-minute window lock the user out for 15 minutes, with a live
+  "try again in N seconds" countdown. The window slides — failures from an
+  hour ago don't count — so a genuinely clumsy user is not punished hours
+  later, and a slow drip that never exceeds 5 per 30 minutes is never
+  locked (acceptable: each single wrong-code attempt is a 1-in-a-million
+  TOTP guess, and the lockout exists to make dense automated brute force
+  uneconomical, which it does).
+- **A locked-out user is not held hostage.** The 15-minute lockout runs
+  from the moment it trips and cannot be extended by further wrong
+  attempts — an attacker who knows your username cannot keep your lockout
+  rolling forever by re-submitting codes during the countdown. The
+  countdown always ends.
 - **A code sits in someone's inbox.** That is exactly the threat model: an
   email can be forwarded, spoofed back, or typed from a shared family
   mailbox. So every email code is **single-use** — the first successful
