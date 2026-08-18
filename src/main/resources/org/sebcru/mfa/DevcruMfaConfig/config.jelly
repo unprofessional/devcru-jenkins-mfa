@@ -1,0 +1,55 @@
+<?jelly escape-by-default='true'?>
+<!--
+  Admin config form for DevcruMfaConfig. Rendered on the global "Security"
+  config page (getCategory() = SECURITY). Every field maps 1:1 to a
+  DevcruMfaConfig bean field; req.bindJSON(this, json) in configure() writes
+  them back and save() persists to config.xml.
+-->
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form">
+  <f:section title="Devcru MFA" description="TOTP + email one-time code gate with long remembered devices.">
+    <f:entry title="${%policy}" field="policy"
+             description="${%policy.hint}">
+      <f:select/>
+    </f:entry>
+    <f:entry title="${%issuer}" field="issuer"
+             description="${%issuer.hint}">
+      <f:textbox/>
+    </f:entry>
+    <f:entry title="${%rememberForHours}" field="rememberForHours"
+             description="${%rememberForHours.hint}">
+      <f:number min="1"/>
+    </f:entry>
+    <f:entry title="${%trustMinHours}" field="trustMinHours"
+             description="${%trustMinHours.hint}">
+      <f:number min="1"/>
+    </f:entry>
+    <f:entry title="${%totpWindow}" field="totpWindow"
+             description="${%totpWindow.hint}">
+      <f:number min="0"/>
+    </f:entry>
+    <f:entry title="${%emailCodeTtlSeconds}" field="emailCodeTtlSeconds"
+             description="${%emailCodeTtlSeconds.hint}">
+      <f:number min="1"/>
+    </f:entry>
+    <f:entry title="${%emailResendCooldownSeconds}" field="emailResendCooldownSeconds"
+             description="${%emailResendCooldownSeconds.hint}">
+      <f:number min="1"/>
+    </f:entry>
+    <f:entry title="${%maxAttempts}" field="maxAttempts"
+             description="${%maxAttempts.hint}">
+      <f:number min="1"/>
+    </f:entry>
+    <f:entry title="${%attemptWindowMinutes}" field="attemptWindowMinutes"
+             description="${%attemptWindowMinutes.hint}">
+      <f:number min="1"/>
+    </f:entry>
+    <f:entry title="${%lockoutMinutes}" field="lockoutMinutes"
+             description="${%lockoutMinutes.hint}">
+      <f:number min="1"/>
+    </f:entry>
+    <f:entry title="${%exemptUsers}" field="exemptUsers"
+             description="${%exemptUsers.hint}">
+      <f:textarea rows="4"/>
+    </f:entry>
+  </f:section>
+</j:jelly>
