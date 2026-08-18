@@ -24,6 +24,13 @@ If you're reading this after a context reset: nothing is committed in the workin
   endpoints (Task 6)`), CI green. Repo clean.
 - Plan (in-repo): [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](../plans/2026-08-17-jenkins-mfa-plugin.md)
   — **Task 7 section ≈ lines 531–565**. Read it first thing.
+- **Tech-debt / audit list: [`docs/todo/TECH_DEBT.md`](TECH_DEBT.md)** — the 2026-08-18
+  top-to-bottom audit findings (A1–A14). Three gate this task: **A1**
+  (`DevcruMfaConfig` instance duality — use `current()`, not `get()`, for
+  runtime reads; reconcile the controller + class javadoc when the filter
+  lands), **A3** (`?redirect=` parameter is the authoritative redirect in;
+  `Referer` is the fallback), **A5** (the Task 8 IT must assert the
+  end-to-end pre-login redirect, not just a safe target).
 - Tasks landed so far (all in `git log` on develop): 0 scaffold · 1 `Totp` (RFC 6238) ·
   2 `MfaUserProperty` · 3 `EmailCodeIssuer`+`EmailSender` · 4 `TrustStore`+`RateLimiter`
   · 5 `DevcruMfaConfig` (GlobalConfiguration + admin jelly) · 6 `MfaController` (login

@@ -11,8 +11,9 @@
 > gate filter) not yet started.** Where a section covers Task 7–9 material it
 > is marked *(planned)*.
 >
-> **Audit findings** are in [§10](#10-audit-findings) — observations from the
-> 2026-08-18 top-to-bottom code read. They are *observations for mads's audit*,
+> **Audit findings** live in [`docs/todo/TECH_DEBT.md`](../todo/TECH_DEBT.md)
+> (working list with statuses/owners; §10 here is the pointer). The 2026-08-18
+> top-to-bottom read produced them; they are *observations for mads's audit*,
 > not committed decisions (unless noted).
 
 ---
@@ -499,136 +500,20 @@ Recorded here so the audit does not re-raise them as open issues:
 
 ---
 
-## 10. Audit findings (2026-08-18 top-to-bottom read)
+## 10. Audit findings → [`docs/todo/TECH_DEBT.md`](../todo/TECH_DEBT.md)
 
-Observations for mads's audit, ordered roughly by weight. None are changes —
-this pass is documentation only.
+Split out of this record on 2026-08-18 (commit following the 2026-08-18
+audit) into a **working** list with statuses (`DECIDE` / `OPEN` / `CTX`),
+owners by task, and a Resolved table. The findings keep their A1–A14
+numbers, so every cross-reference in this file, the plan, and the Task 7
+handoff still lands.
 
-**A1 · `DevcruMfaConfig` instance duality puts the gate on a defaults
-instance in live operation.**
-`MfaController` (and the planned filter, until re-wired) reads policy via
-`get()` — the static process-default — while admin saves land on the
-descriptor instance (`current()`'s domain). On a live Jenkins, a fresh
-`DevcruMfaConfig` is constructed once at class-init with the plan defaults and
-is never updated by form saves. Consequence: the gate currently runs on
-defaults, and admin-visible tuning (windows, exemptions, policy) only reaches
-it once the filter/`current()` path lands. The `DevcruMfaConfig` class doc
-says callers "use `{@code get()}`"; the handoff says the filter uses
-`current()`. The audit should pin which instance is authoritative and
-reconcile the doc in the same commit. **The Task 7 handoff already
-half-decides this (filter → `current()`); the controller remains on
-`get()`.**
+The three that gate Task 7: **A1** (config instance duality — mads ruling
+on `get()` vs `current()`), **A2** (`emailCodeSecret` unprovisioned —
+blank-string HMAC key until minting lands), **A3/A5** (the
+`?redirect=` parameter vs the POST's `Referer` — "back to where you were"
+currently resolves to the MFA page itself).
 
-**A2 · `emailCodeSecret` is never provisioned anywhere in the landing code.**
-`MfaUserProperty.setEmailCodeSecret` is documented as "set by Task 3 when the
-email factor is first enrolled", but Task 3 (`EmailCodeIssuer`) never writes
-it, and the controller passes
-`p.getEmailCodeSecret() == null ? "" : …` — a **blank-string HMAC key**. The
-hash model still works (single-use, TTL, per-user-keyed… with key "") but the
-signed confidentiality story ("per-user HMAC key, master-key encrypted") is
-currently not implemented: every user's codes would hash under the empty key
-until a provisioning path lands (planned: the Task 9 enrolment UI must mint
-`Totp.newBase32Secret()`-style material and store it via `Secret.fromString`).
-Until then, "two users' states cannot be correlated" is true only weakly.
-**Action for audit: confirm Task 9 owns provisioning, or add a
-server-side lazy-mint in the controller.**
-
-**A3 · The gate (Task 7) will 302 with `?redirect=<target>` but the
-controller reads `Referer`, not the query parameter.**
-`resolveRedirectTarget` is fed `req.getHeader("Referer")`; the handoff's
-filter spec sends the redirect target as a query parameter. Both are
-server-validated in different shapes, but the contract must be singular:
-either the filter's `?redirect=` is the authoritative in (and the Referer
-branch becomes the fallback), or the filter stops sending it. If the filter's
-target is validated *before* the 302 and the controller re-validates via
-Referer, the two validators must not drift — the pure function is a single
-home that both should share. **Action for audit: settle the redirect
-parameter contract when Task 7 lands.**
-
-**A4 · `DevcruMfaConfig.current()` iterates `GlobalConfiguration.all()` on
-every call.**
-Fine for today's call volume (per-endpoint, not per-browser-tab), but the
-Task 7 filter runs this on *every request*. Jenkins has an indexed
-`GlobalConfiguration.all()` but the cast-scan is O(n-plugin-configs) per
-request; acceptable, but worth a one-line comment in Task 7 if filter
-latency is ever profiled. Not a defect.
-
-**A5 · `MfaController.postVerify` computes `resolveRedirectTarget` from the
-`Referer` of the *POST*, not the original page load.**
-A same-origin POST carries the *MFA page's own URL* as its `Referer`
-(browser→same-origin preserves it; `/securityRealm/mfa` is the page that
-issued the form POST) — so "back to where you were" via the POST's Referer
-resolves to the MFA page itself, not the pre-login page, in the normal
-browser path.
-The `?redirect=<target>` query parameter is therefore likely the *intended*
-primary source, reinforcing A3. **High-priority audit item for Task 7/8: the
-IT must assert the end-to-end "back to where you were" actually lands on the
-pre-login URL**, not the MFA page.
-
-**A6 · README phrasing "keeps the browser trusted for the configured window"
-conflates the two trust instruments.**
-See §5 "Trust semantics": the session flag keeps *this* session alive
-(indefinitely, until logout/restart), `trustedUntilMs` governs *future*
-logins. The end-user-facing sentence is directionally right but imprecise
-about *which* login it describes. Cosmetic; flag for the next README
-practical-usage pass.
-
-**A7 · `failedAttemptStreak` is write-only (and unbounded).**
-`postVerify` increments and persists it on every failure; `RateLimiter.clear`
-(reset on success / lockout) does NOT reset it, and nothing reads it (Task 9
-planned UI hint). It will monotonically grow per user. Either Task 9 consumes
-it and Task 9's clear-path resets it, or it should stop persisting a
-counter nothing reads. **Action for audit: decide owner before Task 9 lands.**
-
-**A8 · `lastVerifiedFactor` is documented telemetry with no writer.**
-Comment: "0 = totp, 1 = email. Telemetry only." — but `postVerify` never
-sets it, so every user's property carries 0 (implies "totp") even for
-email-only users. Same family as A7: Task 9 (or the controller) should write
-it, or the field is dead. Flagged, not fixed.
-
-**A9 · `MfaUserProperty.isMfaEnabled()` — reviewed, no defect, but fragile.**
-`isMfaEnabled()` calls `totpSecret.getPlainText()` under a
-`totpSecret != null` guard before the empty check — safe as written (same
-shape as `hasTotpFactor()`). Recorded because the guard is easy to
-"simplify" away later into a real NPE on a non-null-but-blank secret.
-
-**A10 · Stale pending-code state lingers after expiry (by design, but worth
-naming).** `verify` clears the pending state only on a *hash match* (both
-the `CONSUMED` and `EXPIRED` branches). A non-matching attempt against an
-expired pending code returns `WRONG_CODE` and leaves the dead hash in place
-until a later matching attempt or a fresh issue overwrites it. Harmless — an
-expired hash authorises nothing — but a reader expecting an eager TTL sweep
-will ask why the field isn't null. No action; context for reviewers.
-
-**A11 · The `MfaController.postVerify` Javadoc still says the page embeds the
-crumb "via core's `h` taglib" — the page actually gets the crumb from the
-Java model (`getCrumbField()`/`getCrumbValue()`), by design, precisely
-because the page skips `<l:view>`.** Doc drift; the class-level doc gets it
-right, the method comment does not.
-
-**A12 · `RateLimiter`'s `synchronized(this)` global monitor serializes all
-users' failure recording.** Correct and cheap (a handful of map ops under the
-lock per failed MFA attempt; the success path is `remove`), but the class
-doc says "lock-free on purpose" only for reads. If the filter (Task 7)
-makes `isLocked` per-request, reads stay lock-free and only *failures*
-serialize — acceptable for a delay measure. No action; context for the
-reviewer.
-
-**A13 · `resolveRedirectTarget`'s port comparison is one-directional.**
-Comparing `Integer.parseInt(port)` only when the referer carries an explicit
-port; a referer without a port matches any site port (including non-default).
-For a single-origin Jenkins this is benign (the browser sends the real
-port when non-default) but worth a comment; not a hole in the
-same-origin guarantee as implemented.
-
-**A14 · `DevcruMfaPlugin` is still the Task 0 stub.** By design (Task 7
-replaces it), recorded so the audit doesn't flag it as an oversight.
-
-**Not in the code yet (planned, not findings):** the gate filter and its
-decision chain (A1/A3/A5 will bite there), the enrolment UI + `emailCode-
-Secret` minting (A2), the integration test that exercises the session
-regeneration + live-mail round trip (Task 8), and the live-box cutover
-(Task 10, per the plan's backup/rollback section).
 
 ---
 

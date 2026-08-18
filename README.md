@@ -46,6 +46,7 @@ architecture & design-decision record used to audit the code.
 | [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
 | [`docs/todo/2026-08-18-task7-handoff.md`](docs/todo/2026-08-18-task7-handoff.md) | Fresh-session handoff note for Task 7 (the gate filter): where the build stands after Task 6, the re-verified 2.528.3-core API findings (incl. three corrections to the plan sketch — no `JenkinsUtil`, `jenkins.security.*` package, jakarta-only filter), the existing seams, and the execution order. |
 | [`docs/architecture/`](docs/architecture/README.md) | Architecture & design-decision record (abstractions, state-management boundaries, Jenkins integration surface, auth/security seams). The audit companion. |
+| [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A14, with status/owner per item). Task 7 is gated on the three `DECIDE`/`OPEN` items there (A1 config duality, A2 unprovisioned email HMAC key, A3/A5 redirect contract). |
 
 
 ## Practical usage — what end users should expect
