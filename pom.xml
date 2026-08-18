@@ -51,6 +51,11 @@
       <artifactId>core</artifactId>
       <version>${zxing.version}</version>
     </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
     <!-- No TOTP lib: core implements RFC 6238.
          commons-codec (Base32) + jakarta.mail are in Jenkins core. -->
   </dependencies>
