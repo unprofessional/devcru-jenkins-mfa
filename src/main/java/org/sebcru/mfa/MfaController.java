@@ -11,7 +11,6 @@ import java.io.PrintWriter;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Enumeration;
-import jenkins.model.Jenkins;
 import net.sf.json.JSONObject;
 import org.kohsuke.stapler.Stapler;
 import org.kohsuke.stapler.StaplerRequest2;
@@ -41,12 +40,17 @@ import org.sebcru.mfa.gate.TrustStore;
  * post-MFA redirect landed on deprecated/blank pages. Here the redirect
  * target is <strong>server-computed and validated</strong> by
  * {@link #resolveRedirectTarget(String, String, String, String)} from the
- * request's {@code Referer}; anything cross-origin, protocol-relative,
- * missing, or pointing at a login/security path degrades to the site root.
- * The client JS never constructs its own target from the raw {@code Referer} —
+ * request's {@code ?redirect=} parameter — canonical, hand-off from the Task 7
+ * gate (A3 ruling, mads 2026-08-18) — falling back to the {@code Referer}
+ * header when the parameter is absent; anything cross-origin,
+ * protocol-relative, missing, or pointing at a login/security path degrades
+ * to the site root. The client JS never constructs its own target from the
+ * raw {@code Referer} or the raw parameter —
  * it only navigates to the {@code redirect} field the server already vouched
  * for in the JSON response. That single seam is what makes the guarantee
- * hold, and it is the pure method the unit tests pin down.
+ * hold, and it is the pure method the unit tests pin down (the parameter-over-
+ * header precedence is pinned by {@code MfaControllerTest.resolveTargetPrefersCanonicalParameter});
+ * the end-to-end pre-login round trip is pinned by Task 8's IT (A5).
  *
  * <h2>Two deliberate deviations from the plan sketch (flagged for review)</h2>
  * <ol>
@@ -160,15 +164,11 @@ public class MfaController implements RootAction {
 
   /** The current authenticated user, or null (never throws). */
   private User currentUser() {
-    try {
-      // getAuthentication2() is contractually non-null (System authentication
-      // when nobody is logged in), so the null guard is dropped: the
-      // catch is what turns any unexpected state into "anonymous".
-      return User.get2(Jenkins.getAuthentication2());
-    } catch (RuntimeException e) {
-      // Early bootstrap / no Jenkins: treat as anonymous.
-      return null;
-    }
+    // One definition of "who is in this request", shared with the gate
+    // filter (A1: the filter and the controller must agree on the same user
+    // and the same config, or the gate enforces against a different person
+    // than the page the filter sent them to).
+    return MfaFilter.findCurrentUser();
   }
 
   private MfaUserProperty propertyOrNull() {
@@ -207,7 +207,10 @@ public class MfaController implements RootAction {
   /** Issuer label shown in the authenticator app, for the page header. */
   public String getIssuer() {
     try {
-      return DevcruMfaConfig.get().getIssuer();
+      // A1: read the authoritative (descriptor) config, not the stale process
+      // default — same source the gate filter reads, so the label a user sees
+      // and the policy enforced agree on one live object.
+      return DevcruMfaConfig.currentSafe().getIssuer();
     } catch (RuntimeException e) {
       return "Jenkins";
     }
@@ -289,7 +292,7 @@ public class MfaController implements RootAction {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
       return;
     }
-    DevcruMfaConfig cfg = DevcruMfaConfig.get();
+    DevcruMfaConfig cfg = DevcruMfaConfig.currentSafe();
     String name = u.getId();
     long now = System.currentTimeMillis();
 
@@ -353,8 +356,18 @@ public class MfaController implements RootAction {
       rateLimiter.clear(name);
       regenerateVerified(req);
       long hours = trustStore.effectiveTrustHours(cfg);
-      String redirect = resolveRedirectTarget(req.getHeader("Referer"),
-          req.getServerName(), String.valueOf(req.getServerPort()), req.getContextPath());
+      // A3 (mads ruling, 2026-08-18): the ?redirect= query parameter the gate
+      // 302'd to (/securityRealm/mfa?redirect=…) is CANONICAL over Referer —
+      // and for good reason: a browser POST of this form carries the MFA page's
+      // OWN url as its Referer, so a Referer-only contract lands a verified
+      // user back on the MFA page (immediate re-prompt loop). The parameter is
+      // present on the GET that rendered the page; the form JS resubmits it
+      // (index.jelly preserves it on the POST). Both inputs flow through the
+      // one shared pure seam (MfaFilter.resolveTarget → resolveRedirectTarget),
+      // not two shaped validators.
+      String redirect = MfaFilter.resolveTarget(req.getParameter(MfaFilter.REDIRECT_PARAM),
+          req.getHeader("Referer"), req.getServerName(),
+          String.valueOf(req.getServerPort()), req.getContextPath());
       write(rsp, VerifyOutcome.ok(hours, redirect));
     } else {
       // 4. Failure: count it. The 5th in-window failure trips the lockout;
@@ -392,7 +405,7 @@ public class MfaController implements RootAction {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_EMAIL_NOT_ENROLLED));
       return;
     }
-    DevcruMfaConfig cfg = DevcruMfaConfig.get();
+    DevcruMfaConfig cfg = DevcruMfaConfig.currentSafe();
     long now = System.currentTimeMillis();
     long cooldownMs = (long) cfg.getEmailResendCooldownSeconds() * 1000L;
     long last = p.getLastResendAt();
