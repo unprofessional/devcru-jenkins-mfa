@@ -6,9 +6,12 @@
   Single form: one code field for either a 6-digit TOTP or an 8-character
   email code; when the email factor is enrolled, a "send code" action with a
   visible cooldown countdown. Both POSTs carry the core CSRF crumb; both
+  ALSO carry the gate's ?redirect= parameter (A3: it is the canonical
+  "back to where you were" carrier — Referer alone is the MFA page's own
+  URL on a form POST, which would re-prompt the user after a success). Both
   return JSON. On success the page navigates to the server-validated
-  redirect target from the JSON (never the raw Referer) — the "no dead
-  redirect / no open redirect" fix.
+  redirect target from the JSON (never the raw Referer or raw parameter) —
+  the "no dead redirect / no open redirect" fix.
 
   escape-by-default='false' so the inline script/style text
   survives verbatim (default escaping would XML-mangle the JS, where '&amp;'
@@ -149,6 +152,16 @@
           var resendBtn = $("resendBtn");
           var cooldownEl = $("cooldown");
           var crumbInput = form.querySelector("input[type=hidden]");
+          // The gate's ?redirect= parameter is the CANONICAL "back to where
+          // you were" carrier (A3). It is already in this page's URL; we read
+          // it once and re-attach it to every XHR POST below, so the server
+          // sees the same parameter on the verify/resend requests it needs
+          // it on. A Referer-only fallback remains on the server for the
+          // (rare) case the page is opened without the parameter.
+          var redirectParam = null;
+          try {
+            redirectParam = (new URLSearchParams(window.location.search)).get("redirect");
+          } catch (e) { redirectParam = null; }
           var lockUntil = 0;
 
           var MESSAGES = {
@@ -244,7 +257,9 @@
             hideMsg();
             verifyBtn.disabled = true;
             if (resendBtn) { resendBtn.disabled = true; }
-            postForm("postVerify", { code: codeInput.value.trim() }).then(function (res) {
+            var verifyPayload = { code: codeInput.value.trim() };
+            if (redirectParam !== null) { verifyPayload.redirect = redirectParam; }
+            postForm("postVerify", verifyPayload).then(function (res) {
               if (res.ok) {
                 // Navigate ONLY to the server-validated target — never the
                 // raw Referer. The server already ran it through

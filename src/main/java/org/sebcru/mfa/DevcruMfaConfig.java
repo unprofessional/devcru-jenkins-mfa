@@ -47,17 +47,20 @@ import java.util.List;
  *       which has no symbol). Dropped, no functionality lost.</li>
  * </ol>
  *
- * <h2>Unit-testability seam (deliberate, documented)</h2>
- * <p>{@link #get()} returns a process-default instance rather than the
- * Jenkins descriptor, and the fields default to the plan's values at
- * construction. This keeps Task 4's {@code TrustStore}/{@code RateLimiter}
- * (and their plain-JVM tests) independent of a running Jenkins: the gate and
- * its tests see the same shape this class produces. At runtime,
- * {@link #current()} returns the <em>persisted</em> instance (descriptor
- * loaded); Task 7's filter uses {@link #current()}. The descriptor's
- * {@code load()} populates the instance Jenkins serves, and this class's
- * defaults match the plan's table exactly, so a fresh install behaves as
- * documented even before an admin saves anything.
+ * <h2>Instance resolution — the A1 ruling (mads, 2026-08-18)</h2>
+ * <p>{@link #currentSafe()} is <em>authoritative for all runtime reads</em> —
+ * the gate filter AND the controller. In a live Jenkins the persisted
+ * descriptor instance <em>is</em> the config: admin form saves via
+ * {@code configure()} land on it, and both runtime readers see the save in
+ * the same request it was made in. {@link #get()} is the process-default
+ * instance — the null-safe fallback {@link #currentSafe()} provides when no
+ * descriptor is loaded (unit tests, pre-startup bootstrap) — and nothing
+ * else. Wiring a runtime reader onto {@code get()} would reintroduce the
+ * config-instance duality the ruling kills: admin-visible tuning (policy,
+ * windows, exemptions) would reach the gate only by accident.
+ *
+ * <p>Defaults match the plan's §defaults table exactly, so a fresh install
+ * behaves as documented even before an admin saves anything.
  *
  * <h2>Values are the plan's §defaults table — mads-signed.</h2>
  * Do not re-litigate them here; {@code DevcruMfaConfigTest} pins them as
@@ -143,10 +146,15 @@ public final class DevcruMfaConfig extends GlobalConfiguration {
   // -------------------------------------------------------------------
 
   /**
-   * The persisted, Jenkins-served instance (descriptor loaded). Task 7's
-   * filter and the controller use this at runtime. Falls back to the
-   * process-default instance if the descriptor has not been loaded yet
-   * (early unit-test / pre-startup bootstrap) so callers never see null.
+   * The persisted, Jenkins-served instance (descriptor loaded). At runtime the
+   * gate filter, the controller, and every admin save land on <em>this</em>
+   * object — there is one authoritative config for a live Jenkins. Falls
+   * back to the process-default instance if no descriptor is loaded (unit
+   * tests / pre-startup bootstrap) so callers never see null.
+   *
+   * <p>Prefer {@link #currentSafe()} from any code path that also runs in a
+   * plain JVM or before Jenkins is up: this method's descriptor scan calls
+   * {@code Jenkins.get()} internally, which throws before that moment.
    */
   public static DevcruMfaConfig current() {
     for (GlobalConfiguration c : GlobalConfiguration.all()) {
@@ -155,6 +163,25 @@ public final class DevcruMfaConfig extends GlobalConfiguration {
       }
     }
     return get();
+  }
+
+  /**
+   * {@link #current()} with the pre-boot / plain-JVM edge closed: the
+   * descriptor scan is wrapped in a try/catch, so a request that arrives
+   * before (or without) a live Jenkins falls back to the process-default
+   * instance instead of propagating {@code Jenkins.get()}'s
+   * {@code IllegalArgumentException}. Runtime callers (filter, controller)
+   * use this, never the bare {@link #get()}: a live Jenkins' descriptor
+   * instance IS the authoritative config, and {@code get()} would be a
+   * permanently-stale twin (audit A1 ruling — the instance duality this
+   * kills).
+   */
+  public static DevcruMfaConfig currentSafe() {
+    try {
+      return current();
+    } catch (RuntimeException preBoot) {
+      return get();
+    }
   }
 
   // -------------------------------------------------------------------
