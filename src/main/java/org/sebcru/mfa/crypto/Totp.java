@@ -1,5 +1,6 @@
 package org.sebcru.mfa.crypto;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import javax.crypto.Mac;
@@ -69,6 +70,7 @@ public final class Totp {
 
   /** Constant-time equality on the 6-digit strings. */
   private static boolean constEq(String a, String b) {
-    return MessageDigest.isEqual(a.getBytes(), b.getBytes());
+    return MessageDigest.isEqual(
+        a.getBytes(StandardCharsets.US_ASCII), b.getBytes(StandardCharsets.US_ASCII));
   }
 }

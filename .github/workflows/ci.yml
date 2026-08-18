@@ -4,14 +4,14 @@
 # branches) against the branches this repo integrates into.
 #
 # What this does:
-#   - `mvn clean verify` — runs the maven-enforcer "lint" rules (max JDK 21
-#     bytecode), compiles, runs all unit tests (surefire), and packages the
-#     `.hpi`. The enforcer is the project's only build-time lint; no dedicated
-#     linter (Checkstyle / SpotBugs) is configured in the pom yet.
+#   - `mvn clean verify` — runs the build-time lint and test suite and
+#     packages the `.hpi`. The Jenkins plugin parent POM (6.2116) binds
+#     SpotBugs (`spotbugs:check`, fail-on-bug) and maven-enforcer (max JDK 21
+#     bytecode) into the `verify` phase, so this single command is the full
+#     lint + unit-test + package pipeline — `mvn test` alone would skip both.
 #
-# To add a real static-analysis step later, drop a job here (it already has
-# the JDK + Maven cache wired) and reference it; the triggers below need no
-# change.
+# To add more static analysis (e.g. Checkstyle), declare it in the pom; the
+# triggers and this step need no change.
 
 name: CI
 
