@@ -56,6 +56,12 @@ present in that file (TotpTest is the house standard).
 
 - Work branch `develop`; `master` advances only on explicit mads per-step
   approval. No force-push, ever.
+- **Every task that lands, the README's "Practical usage — what end users
+  should expect" section is updated in the same commit** (mads, 2026-08-17):
+  new user-facing behaviour, new corner cases covered, and the honest
+  "implemented vs. in progress" note kept current. The section stays a
+  behaviour contract an end user could actually read — no internals, no
+  jargon, every claim traceable to code/tests or a named plan task.
 - **CI runs on every PR open/update and on pushes to `develop`/`master`**
   (`.github/workflows/ci.yml`): one job = `mvn clean verify` on JDK 21
   (SpotBugs `check` + enforcer + unit tests + `.hpi` packaging).

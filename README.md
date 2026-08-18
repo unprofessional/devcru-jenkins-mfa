@@ -16,9 +16,11 @@ enrolment/management UI, and email-code factor land per the plan
 
 ## Practical usage — what end users should expect
 
-> The TOTP engine and per-user state below are implemented and tested; the
-> gate, UI, and email-code pieces are in progress. Descriptions of login
-> flow are the committed behaviour contract, not yet-shipped screenshots.
+> The TOTP engine, per-user state, and the email-code factor
+> (generation, hashing, single-use, expiry, resend) are implemented and
+> tested. The login gate, enrolment/management UI, and the mail delivery
+> wiring land per the plan. Descriptions of login flow are the committed
+> behaviour contract, not yet-shipped screenshots.
 
 ### Enrolling
 
@@ -26,14 +28,19 @@ enrolment/management UI, and email-code factor land per the plan
   into *any* RFC 6238 authenticator — Google Authenticator, Authy, 1Password.
   No specific app, cloud account, or subscription is required.
 - **Email codes:** the user registers one mailbox; no authenticator app
-  needed.
+  needed. Codes are 8 characters from an unambiguous alphabet (no `0`/`O`,
+  no `1`/`I`), so a code read off a phone at a busy desk is a code that
+  verifies. Codes are single-use and valid for 5 minutes; a resend is
+  available, throttled to one per minute.
 - **At least one factor is required once enrolled; having both is allowed.** A
   TOTP-only user and an email-only user get identical gate protection.
 
 ### Day-to-day login
 
 - Enrolled users enter their password, then a 6-digit code (TOTP rotates
-  every 30 seconds) or an email-delivered one-time code.
+  every 30 seconds) or an 8-character email-delivered one-time code.
+- **Codes are always mailed to the registered mailbox on the account** —
+  never to an address an attacker can point them at.
 - **Remembered devices:** a successful MFA keeps the browser trusted for the
   configured window (default 30 days, never shorter than 24 h), so the code
   is not re-demanded on every visit. API tokens are exempt — CI keeps working.
@@ -46,12 +53,30 @@ enrolment/management UI, and email-code factor land per the plan
   "wrong code" noise. The window is fixed, so an attacker does not collect
   extra valid codes by waiting.
 - **Copy-pasted codes.** Surrounding and embedded whitespace is stripped
-  before comparison; pasting ` 284 361` from a clipboard still works.
+  before comparison; pasting ` 284 361` from a clipboard still works. Email
+  codes match case-insensitively — a mail client that folds to lowercase (or
+  a phone's autocorrect doing it) does not produce a wrong code.
 - **Wrong, short, or garbled input.** Rejected cleanly as a wrong code —
   never a stack trace or a 500 on the login path. (Verification compares in
   constant time; there is no timing side channel to probe.) Failed attempts
   will count toward per-user rate limiting and temporary lockout
   (5 attempts / 15 min by default) — landing with Task 4.
+- **A code sits in someone's inbox.** That is exactly the threat model: an
+  email can be forwarded, spoofed back, or typed from a shared family
+  mailbox. So every email code is **single-use** — the first successful
+  verification kills it, and replaying the email's code gets nothing.
+- **A code outlives the moment it was needed.** Codes expire 5 minutes after
+  issue; an expired code is not "old but valid" — the pending state is
+  cleared, so resubmitting the old email's code cannot succeed. The remedy
+  is one resend (cooldown permitting).
+- **Resend button as a spoofer's mail bomb.** A failed-login attacker who
+  wants to harass the real user by hammering "resend code" is throttled: at
+  most one fresh code per minute, and each resend retires the previous code
+  — an attacker can never keep several live codes in play.
+- **Stealing codes off the server.** Email codes are never stored; what is
+  kept is a per-user-keyed hash (`sha256(HmacSHA256(code, key))`), so
+  filesystem or `config.xml` access yields no usable codes, and one user's
+  state cannot be cross-checked against another user's.
 - **Empty or whitespace-only forms.** A submit with blank TOTP/secret/email
   fields is treated as *not enrolled*, not as enrolled-with-nothing — forms
   cannot lock a user out by accident, and a whitespace email address is
@@ -60,19 +85,21 @@ enrolment/management UI, and email-code factor land per the plan
   who have enrolled at least one factor (plus an exemption list for service
   accounts). Nobody is hard-locked before they've opted in, and headless
   automation on API tokens is unaffected.
-- **Forging trust or resetting counters.** The trust expiry and failure
-  counters are server-managed state; they are deliberately *not* bindable
-  from the user's security-profile form. A crafted profile submit cannot
-  grant itself a 30-day trust or zero out a lockout streak.
+- **Forging trust or resetting counters.** The trust expiry, failure
+  counters, and pending-code state are server-managed; they are
+  deliberately *not* bindable from the user's security-profile form. A
+  crafted profile submit cannot grant itself a 30-day trust, zero out a
+  lockout streak, or submit a crafted pending code.
 - **Lost everything (lost phone and mailbox).** Documented admin recovery
   path clears the user's stored factor state; the user re-enrolls. No
   self-service reset, by design.
 
 ### Storage and privacy
 
-- The TOTP seed and the per-user email-code HMAC key are stored
-  **encrypted at rest** with the Jenkins master key — not readable from
-  `config.xml` even by someone with filesystem access.
+- The TOTP seed, the per-user email-code HMAC key, and the pending-code
+  hash are stored **encrypted at rest** with the Jenkins master key — not
+  readable from `config.xml` even by someone with filesystem access.
+  Email codes themselves never touch disk.
 - The registered mailbox is stored in plain text on purpose: it is a
   delivery address, not a credential, and an admin investigating a lockout
   should be able to see it.
