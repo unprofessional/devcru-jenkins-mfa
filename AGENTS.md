@@ -56,6 +56,13 @@ present in that file (TotpTest is the house standard).
 
 - Work branch `develop`; `master` advances only on explicit mads per-step
   approval. No force-push, ever.
+- **CI runs on every PR open/update and on pushes to `develop`/`master`**
+  (`.github/workflows/ci.yml`): one job = `mvn clean verify` on JDK 21
+  (SpotBugs `check` + enforcer + unit tests + `.hpi` packaging).
+- **Local validation must mirror CI: use `mvn clean verify`, not `mvn test`.**
+  The Jenkins plugin parent POM binds SpotBugs into the `verify` phase, so
+  `mvn test` silently skips the linter. (This exact gap shipped a
+  default-charset bug that only CI caught — see `Totp.constEq` history.)
 - TDD throughout: the plan's independent oracles (RFC vectors, published
   examples, known-good fixtures) beat internal-consistency tests whenever
   one exists.
