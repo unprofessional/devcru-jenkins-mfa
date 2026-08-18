@@ -1,0 +1,65 @@
+# CI for devcru-mfa (Jenkins plugin).
+#
+# Runs on every PR open / update / reopen (and on pushes to the target
+# branches) against the branches this repo integrates into.
+#
+# What this does:
+#   - `mvn clean verify` — runs the maven-enforcer "lint" rules (max JDK 21
+#     bytecode), compiles, runs all unit tests (surefire), and packages the
+#     `.hpi`. The enforcer is the project's only build-time lint; no dedicated
+#     linter (Checkstyle / SpotBugs) is configured in the pom yet.
+#
+# To add a real static-analysis step later, drop a job here (it already has
+# the JDK + Maven cache wired) and reference it; the triggers below need no
+# change.
+
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [develop, master]
+
+# A fresh push to the same PR cancels the stale in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Lint + unit tests (JDK 21)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: m2-${{ runner.os }}-${{ hashFiles('pom.xml') }}
+          restore-keys: |
+            m2-${{ runner.os }}-
+
+      # -DskipITs: no failsafe integration tests are wired up yet; surefire
+      # unit tests (incl. the Jenkins InjectedTest harness) still run.
+      - name: Build, lint (enforcer), and test
+        run: mvn -B -ntp clean verify -DskipITs
+
+      - name: Upload JAR/HPI as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devcru-mfa
+          path: target/*.hpi
+          if-no-files-found: warn
