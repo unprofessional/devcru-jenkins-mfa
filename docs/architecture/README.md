@@ -211,6 +211,12 @@ session id changes; authentication does not.
   A stolen `config.xml` yields no usable codes; two users' states cannot be
   correlated. Comparison is over hashed forms ⇒ no timing signal on a wrong
   code.
+- **Per-user key provenance (A2, landed 2026-08-18):** `perUserCodeSecret`
+  is auto-provisioned by `MfaController.ensureEmailCodeSecret` — a pure,
+  idempotent seam that mints a 128-bit random key on first email use behind
+  `hasEmailFactor()` and returns the stored key thereafter. The original
+  blank-string fallback is gone; the Task 9 enrolment UI adds the second,
+  at-enrolment minting path.
 - **Single-use:** on a matching hash the pending state is cleared *before*
   the TTL is consulted (expired-match also clears), so replay is impossible —
   including by the same user, and a retried POST cannot double-consume.
@@ -503,16 +509,17 @@ Recorded here so the audit does not re-raise them as open issues:
 ## 10. Audit findings → [`docs/todo/TECH_DEBT.md`](../todo/TECH_DEBT.md)
 
 Split out of this record on 2026-08-18 (commit following the 2026-08-18
-audit) into a **working** list with statuses (`DECIDE` / `OPEN` / `CTX`),
-owners by task, and a Resolved table. The findings keep their A1–A14
-numbers, so every cross-reference in this file, the plan, and the Task 7
-handoff still lands.
+audit) into a **working** list with statuses (mads rulings recorded
+2026-08-18: `RULING-RECORDED` / `OPEN` / `CTX`), owners by task, and a
+Resolved table. The findings keep their A1–A14 numbers, so every
+cross-reference in this file, the plan, and the Task 7 handoff still lands.
 
-The three that gate Task 7: **A1** (config instance duality — mads ruling
-on `get()` vs `current()`), **A2** (`emailCodeSecret` unprovisioned —
-blank-string HMAC key until minting lands), **A3/A5** (the
-`?redirect=` parameter vs the POST's `Referer` — "back to where you were"
-currently resolves to the MFA page itself).
+What gates Task 7: **A1** (config instance duality — ruled: `current()`
+authoritative for all runtime reads), **A3/A5** (the `?redirect=` parameter
+is canonical over the POST's `Referer` — "back to where you were" must be
+asserted end-to-end in the Task 8 IT). **A2** (email-code HMAC key) had no
+gap: the lazy-mint path landed 2026-08-18 (`MfaController.ensureEmailCode-
+Secret`), and only the Task 9 enrolment-UI minting remains.
 
 
 ---

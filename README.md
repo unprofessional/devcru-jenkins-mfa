@@ -52,14 +52,14 @@ architecture & design-decision record used to audit the code.
 ## Practical usage — what end users should expect
 
 > The TOTP engine, per-user state, the email-code factor (generation,
-> hashing, single-use, expiry, resend), the two gate brains, the admin
-> settings, and the MFA login screen with its verify/resend endpoints are
-> implemented and tested; mail codes are delivered through the standard
-> Jenkins Mailer (global SMTP config) once that plugin — preinstalled on
-> any real instance — is present. The automatic login interception (Task
-> 7) and the enrollment/management UI (Task 9) still land per the plan, so
-> the flow described below is the committed behaviour contract, not a
-> shipped screen yet.
+> hashing, single-use, expiry, resend, and auto-provisioned per-user HMAC
+> key), the two gate brains, the admin settings, and the MFA login screen
+> with its verify/resend endpoints are implemented and tested; mail codes
+> are delivered through the standard Jenkins Mailer (global SMTP config)
+> once that plugin — preinstalled on any real instance — is present. The
+> automatic login interception (Task 7) and the enrollment/management UI
+> (Task 9) still land per the plan, so the flow described below is the
+> committed behaviour contract, not a shipped screen yet.
 
 ### Enrolling
 
@@ -166,8 +166,11 @@ architecture & design-decision record used to audit the code.
 
 - The TOTP seed, the per-user email-code HMAC key, and the pending-code
   hash are stored **encrypted at rest** with the Jenkins master key — not
-  readable from `config.xml` even by someone with filesystem access.
-  Email codes themselves never touch disk.
+  readable from `config.xml` even by someone with filesystem access.  The
+  per-user HMAC key is auto-provisioned on first email use when it does not
+  yet exist (a fresh 128-bit random value, minted once and never reused), so
+  every account hashes its codes under its own key rather than a shared
+  default. Email codes themselves never touch disk.
 - The registered mailbox is stored in plain text on purpose: it is a
   delivery address, not a credential, and an admin investigating a lockout
   should be able to see it.

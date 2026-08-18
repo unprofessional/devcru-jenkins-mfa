@@ -4,6 +4,7 @@ import hudson.Extension;
 import hudson.model.RootAction;
 import hudson.model.User;
 import hudson.security.csrf.CrumbIssuer;
+import hudson.util.Secret;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -305,6 +306,10 @@ public class MfaController implements RootAction {
     // 2. Attempt ordering: try the factor the input's shape selects; if the
     //    user hasn't enrolled that one, fall back to the other enrolled factor;
     //    if neither is enrolled, say so (no factor to check against).
+    //    The email path mints the per-user HMAC key lazily (idempotent) inside
+    //    verifyEmail/postResendEmail — only for users who actually have the
+    //    email factor, so a TOTP-only account is never handed a key it has no
+    //    use for.
     boolean verified = false;
     String failReason = VerifyOutcome.ERR_NOT_ENROLLED;
     switch (f) {
@@ -398,7 +403,7 @@ public class MfaController implements RootAction {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_COOLDOWN).withRetrySeconds(remainSec));
       return;
     }
-    String perUserSecret = emailCodeSecret(p);
+    String perUserSecret = ensureEmailCodeSecret(p);
     String code = emailIssuer.resend(p, perUserSecret, now,
         cfg.getEmailResendCooldownSeconds(), cfg.getEmailCodeTtlSeconds(), emailSender);
     if (code == null) {
@@ -424,12 +429,7 @@ public class MfaController implements RootAction {
   }
 
   private EmailCodeIssuer.VerifyResult verifyEmail(MfaUserProperty p, DevcruMfaConfig cfg, String submitted, long now) {
-    return emailIssuer.verify(p, emailCodeSecret(p), submitted, now, cfg.getEmailCodeTtlSeconds());
-  }
-
-  /** Per-user email-code HMAC key plaintext; blank when never provisioned. */
-  private String emailCodeSecret(MfaUserProperty p) {
-    return p.getEmailCodeSecret() == null ? "" : p.getEmailCodeSecret().getPlainText();
+    return emailIssuer.verify(p, ensureEmailCodeSecret(p), submitted, now, cfg.getEmailCodeTtlSeconds());
   }
 
   /**
@@ -503,6 +503,43 @@ public class MfaController implements RootAction {
   // =====================================================================
 
   public enum Factor { TOTP, EMAIL, UNKNOWN }
+
+  /**
+   * Return the per-user email-code HMAC key, minting it the first time and
+   * never re-minting afterwards (idempotent).
+   *
+   * <p>This is the A2 audit finding, ruled 2026-08-18: the controller
+   * previously fed a <em>blank-string</em> key to {@link EmailCodeIssuer}
+   * because nothing anywhere provisioned the per-user key, so every
+   * account's pending codes hashed under the same key and the
+   * "per-user-keyed, encrypted at rest, states cannot be correlated"
+   * confidentiality story was false. Minting on first use closes that gap
+   * before the Task 9 enrolment UI exists (this is the first of the two
+   * minting paths mads ruled; the enrolment UI is the second).
+   *
+   * <p>GIVEN a property with no {@code emailCodeSecret} yet
+   * WHEN  called, THEN it stores a fresh 128-bit random key
+   *       (Secret-encrypted at rest on the next {@code u.save()}) and
+   *       returns its plaintext.
+   * WHEN  the property already has a key, THEN it returns that key
+   *       unchanged — never re-minting. Re-minting would invalidate a code
+   *       that was just issued under the previous key, turning a resend
+   *       into a "wrong code."
+   *
+   * <p>Pure over a {@link MfaUserProperty} (no Jenkins, no I/O, no clock),
+   * so it is pinned in a plain-JVM unit test exactly like the other seams.
+   * Only call sites behind {@code hasEmailFactor()} — a TOTP-only user is
+   * never handed a key it has no use for.
+   */
+  static String ensureEmailCodeSecret(MfaUserProperty p) {
+    Secret existing = p.getEmailCodeSecret();
+    if (existing != null && !existing.getPlainText().isEmpty()) {
+      return existing.getPlainText();
+    }
+    String minted = Totp.newBase32Secret();
+    p.setEmailCodeSecret(Secret.fromString(minted));
+    return minted;
+  }
 
   /**
    * Classify a submitted code by its <em>shape</em>, which selects the factor

@@ -2,8 +2,13 @@ package org.sebcru.mfa;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
+import hudson.util.Secret;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 import org.sebcru.mfa.MfaController.Factor;
 
@@ -329,5 +334,80 @@ class MfaControllerTest {
     assertEquals("", MfaController.maskEmail("   "));
     assertEquals("***", MfaController.maskEmail("no-at-sign"));
     assertEquals("m***@devcru.org", MfaController.maskEmail("  mads@devcru.org  "));
+  }
+
+  // =====================================================================
+  // ensureEmailCodeSecret — per-user HMAC key lazy-mint (A2 ruling, 2026-08-18)
+  // =====================================================================
+
+  /**
+   * WHAT: the per-user email-code HMAC key is provisioned on first use and
+   * never after — the A2 audit finding said the controller fed a
+   * *blank-string* key to {@code EmailCodeIssuer} because nothing ever minted
+   * the key. This seam mints exactly once (when the property holds none) and
+   * returns the already-stored key unchanged otherwise, so every user's
+   * pending codes are hashed under a unique, high-entropy, persisted key
+   * rather than a shared empty one.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN an email-enrolled user whose property has NO emailCodeSecret yet
+   * WHEN  ensureEmailCodeSecret(p) runs
+   * THEN  it returns a non-blank key,
+   * AND   the property is now holding a non-null Secret whose plaintext ==
+   *       the returned key (persisted, master-key encrypted at save time)
+   * WHEN  ensureEmailCodeSecret(p) runs a second time
+   * THEN  it returns the SAME key — it is NOT re-minted (idempotent)
+   * GIVEN a user whose property ALREADY has a key stored
+   * WHEN  ensureEmailCodeSecret(p) runs
+   * THEN  it returns that exact key, unchanged (never clobbers an existing one)
+   * </pre>
+   *
+   * <p>WHY/SOLVES: the mads-signed confidentiality story is
+   * "per-user HMAC key, master-key encrypted at rest, two users' states cannot
+   * be correlated." With a blank string as the key every account's pending
+   * code hashes under *the same* key, so that story is false. Minting on first
+   * use (rather than waiting for the Task 9 enrolment UI) closes that gap
+   * before any enrol screen exists — the lazy-mint is the first of the two
+   * minting paths mads ruled (A2); the enrolment UI is the second. Idempotency
+   * matters because both {@code postResendEmail} and the TOTP-fallback
+   * {@code verifyEmail} call this on the hot path — a re-mint would invalidate
+   * a code that was just issued under the previous key, turning a resend into
+   * a "wrong code."
+   */
+  @Test
+  void lazilyMintsPerUserEmailCodeHmacKeyExactlyOnce() {
+    // Fresh property, no key yet.
+    MfaUserProperty p = new MfaUserProperty();
+    p.setRegisteredEmail("mads@devcru.org");
+    assertNull(p.getEmailCodeSecret(), "precondition: no key provisioned yet");
+
+    String first = MfaController.ensureEmailCodeSecret(p);
+    assertFalse(first == null || first.isBlank(),
+        "minted key must be non-blank (a blank HMAC key is the A2 defect)");
+    notNullSecretWithPlain(p, first);
+
+    // Idempotent: a second call must NOT re-mint.
+    String second = MfaController.ensureEmailCodeSecret(p);
+    assertEquals(first, second,
+        "lazy-mint must be idempotent — re-minting would invalidate a code "
+            + "just issued under the previous key");
+
+    // A pre-existing key is returned unchanged, never clobbered.
+    MfaUserProperty pre = new MfaUserProperty();
+    pre.setRegisteredEmail("mads@devcru.org");
+    String existing = "pre-provisioned-key-0123456789";
+    pre.setEmailCodeSecret(Secret.fromString(existing));
+    assertEquals(existing, MfaController.ensureEmailCodeSecret(pre),
+        "an already-stored key must be returned unchanged");
+  }
+
+  private static void notNullSecretWithPlain(MfaUserProperty p, String expected) {
+    assertNotNull(p.getEmailCodeSecret(),
+        "the minted key must be stored on the property (persisted at u.save())");
+    assertArrayEquals(
+        expected.getBytes(StandardCharsets.US_ASCII),
+        p.getEmailCodeSecret().getPlainText().getBytes(StandardCharsets.US_ASCII),
+        "stored Secret plaintext must equal the returned key");
   }
 }

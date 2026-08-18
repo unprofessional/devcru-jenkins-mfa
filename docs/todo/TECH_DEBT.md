@@ -43,23 +43,32 @@ wired.
 > update stale "single source of truth" claims).
 
 ### A2 — `emailCodeSecret` never minted; codes hash under a blank-string key
-**Status: RULING-RECORDED.** **Owner: standalone commit (controller
-lazy-mint) + Task 9 (enrolment UI minting). Both.**
+**Status: RULING-RECORDED — lazy-mint path LANDED; Task 9 enrolment-UI path outstanding.** **Owner: controller lazy-mint (this commit) + Task 9 (enrolment UI minting). Both.**
 
-`MfaUserProperty.setEmailCodeSecret` is documented as "set by Task 3 when the
-email factor is first enrolled", but Task 3 (`EmailCodeIssuer`) never writes
-it, and the controller passes
-`p.getEmailCodeSecret() == null ? "" : …` — a **blank-string HMAC key**. The
-mechanics still work (single-use, TTL, replay-proof), but the mads-signed
+*Originally:* the controller fed
+`p.getEmailCodeSecret() == null ? "" : …` — a **blank-string HMAC key** — to
+`EmailCodeIssuer`, because nothing anywhere minted the per-user key. The
+mechanics worked (single-use, TTL, replay-proof), but the mads-signed
 confidentiality story — per-user HMAC key, master-key encrypted at rest,
-"two users' states cannot be correlated" — is not actually implemented.
+"two users' states cannot be correlated" — was not implemented: every
+account hashed under the same empty key.
 
 > **Ruling (mads, 2026-08-18):** **both** paths — the Task 9 enrolment UI
 > mints the key at first email enrolment, *and* the controller lazy-mints on
-> first email issue — so there is no gap between now and Task 9. The
-> lazy-mint is a standalone commit (Sebastian); the enrolment-side minting
-> lands with Task 9. README's "per-user-keyed" sentence becomes true once
-> the lazy-mint lands.
+> first email issue — so there is no gap between now and Task 9. README's
+> "per-user-keyed" sentence becomes true once the lazy-mint lands.
+
+> **Landed (this commit):** `MfaController.ensureEmailCodeSecret(p)` — a
+> pure, idempotent seam. First email use behind `hasEmailFactor()` mints a
+> fresh 128-bit random key (`Totp.newBase32Secret()`, stored as a
+> master-key-encrypted `Secret`), persisted on the next `u.save()`; every
+> later call returns the stored key unchanged. Both call sites
+> (`verifyEmail`, `postResendEmail`) now route through it, and the
+> blank-string fallback is gone. Pinned by
+> `MfaControllerTest.lazilyMintsPerUserEmailCodeHmacKeyExactlyOnce`
+> (mint-once, idempotent, never-clobbers). TOTP-only users are never
+> handed a key. **Outstanding:** the Task 9 enrolment UI still owns the
+> *second* minting path (mint at enrolment, before first login).
 
 ### A3 — `?redirect=` query parameter vs `Referer`: two redirect contracts
 **Status: RULING-RECORDED.** **Owner: Task 7 (filter plumbing) + Task 8 (IT
