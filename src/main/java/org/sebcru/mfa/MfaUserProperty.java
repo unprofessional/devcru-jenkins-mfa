@@ -92,6 +92,19 @@ public class MfaUserProperty extends UserProperty {
     return registeredEmail != null && !registeredEmail.isBlank();
   }
 
+  /** @return true iff the TOTP factor is enrolled (a non-empty seed exists). */
+  public boolean hasTotpFactor() {
+    return totpSecret != null && !totpSecret.getPlainText().isEmpty();
+  }
+
+  /** @return true iff the email factor is enrolled (a non-blank register
+   *  address exists). The controller's factor-selection logic and the page's
+   *  "use email code" affordance both key off this, so "email enrolled" has
+   *  one definition in this class, not one per caller. */
+  public boolean hasEmailFactor() {
+    return registeredEmail != null && !registeredEmail.isBlank();
+  }
+
   // ---- TOTP factor (user-facing) ----
 
   public Secret getTotpSecret() {

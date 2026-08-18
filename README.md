@@ -9,16 +9,29 @@ paywalled UI) on `jenkins.devcru.org` (Jenkins 2.577, Local Security Realm).
 
 ## Status
 
-Tasks 0–5 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
+Tasks 0–6 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
 RFC 4226/6238 vectors), per-user factor state, the email-code factor
 (generation, hashing, single-use, expiry, resend throttle), the two gate
 brains — the remembered-device trust (24 h policy floor) and the per-user
 rate limiter / lockout (sliding 30-minute failure window, 5 attempts,
-15-minute lockout that cannot be extended by retries) — and the admin
+15-minute lockout that cannot be extended by retries) — the admin
 configuration surface (Manage Jenkins → Security: policy, issuer, trust
-windows, rate-limit knobs, exempt users). The login gate, enrolment/
-management UI, and mail delivery wiring land per the plan in this repo
-([`todo/2026-08-17-jenkins-mfa-plugin.md`](todo/2026-08-17-jenkins-mfa-plugin.md)).
+windows, rate-limit knobs, exempt users), and the MFA controller: the login
+screen at `/securityRealm/mfa` with its two POST endpoints (TOTP or email
+code verification, and email-code resend via Jenkins' standard Mailer), the
+shape-based factor router, the open-redirect-safe "back to where you were"
+redirect resolver, and session fix-up on success. The redirect resolver's
+decision table is unit-tested; the endpoint glue is covered by the Task 8
+integration test. The login gate filter (interception), enrolment/
+management UI, and end-to-end mail round trips land per the plan in this
+repo ([`todo/2026-08-17-jenkins-mfa-plugin.md`](todo/2026-08-17-jenkins-mfa-plugin.md)).
+
+Two Task 6 deviations from the plan sketch, both flagged in the commit and
+in the code: (1) the controller mounts as a `hudson.model.RootAction`
+because `jenkins.model.GlobalAction` does not exist in the resolved
+2.528.3 core, and (2) `postResendEmail` takes no destination parameter —
+codes go to the account's registered mailbox and only there, so the
+resend button cannot be turned into an open mail relay.
 
 ## Project documentation (in this repo)
 
@@ -30,11 +43,15 @@ management UI, and mail delivery wiring land per the plan in this repo
 
 ## Practical usage — what end users should expect
 
-> The TOTP engine, per-user state, and the email-code factor
-> (generation, hashing, single-use, expiry, resend) are implemented and
-> tested. The login gate, enrolment/management UI, and the mail delivery
-> wiring land per the plan. Descriptions of login flow are the committed
-> behaviour contract, not yet-shipped screenshots.
+> The TOTP engine, per-user state, the email-code factor (generation,
+> hashing, single-use, expiry, resend), the two gate brains, the admin
+> settings, and the MFA login screen with its verify/resend endpoints are
+> implemented and tested; mail codes are delivered through the standard
+> Jenkins Mailer (global SMTP config) once that plugin — preinstalled on
+> any real instance — is present. The automatic login interception (Task
+> 7) and the enrollment/management UI (Task 9) still land per the plan, so
+> the flow described below is the committed behaviour contract, not a
+> shipped screen yet.
 
 ### Enrolling
 
