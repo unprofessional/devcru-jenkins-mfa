@@ -17,8 +17,16 @@ rate limiter / lockout (sliding 30-minute failure window, 5 attempts,
 15-minute lockout that cannot be extended by retries) — and the admin
 configuration surface (Manage Jenkins → Security: policy, issuer, trust
 windows, rate-limit knobs, exempt users). The login gate, enrolment/
-management UI, and mail delivery wiring land per the plan
-(`docs/plans/2026-08-17-jenkins-mfa-plugin.md`).
+management UI, and mail delivery wiring land per the plan in this repo
+([`todo/2026-08-17-jenkins-mfa-plugin.md`](todo/2026-08-17-jenkins-mfa-plugin.md)).
+
+## Project documentation (in this repo)
+
+| File | What it is |
+|---|---|
+| [`todo/2026-08-17-jenkins-mfa-plugin.md`](todo/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
+| [`todo/2026-08-18-task6-handoff.md`](todo/2026-08-18-task6-handoff.md) | Fresh-session handoff note for Task 6: where the build stands, the verified 2.528.3-core API findings (incl. the `GlobalAction` → `RootAction` deviation), the existing seams, and the proposed execution order. |
+
 
 ## Practical usage — what end users should expect
 

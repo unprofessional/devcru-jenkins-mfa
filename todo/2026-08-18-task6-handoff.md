@@ -14,7 +14,7 @@ If you're reading this after a context reset: Tasks 0–5 are done, tested, and 
 ## Where we are
 
 - Branch `develop` at `7bebb6e` (`feat(config): DevcruMfaConfig global configuration + admin UI`), CI green. Repo clean.
-- Plan: `/home/hunter/docs/plans/2026-08-17-jenkins-mfa-plugin.md` — **Task 6 section ≈ lines 489–527**. Read it first thing.
+- Plan (in-repo): [`todo/2026-08-17-jenkins-mfa-plugin.md`](2026-08-17-jenkins-mfa-plugin.md) — **Task 6 section ≈ lines 489–527**. Read it first thing.
 - Tasks landed so far (all in repo history via git log on develop): 0 scaffold · 1 `Totp` (RFC 6238) · 2 `MfaUserProperty` · 3 `EmailCodeIssuer`+`EmailSender` · 4 `TrustStore`+`RateLimiter` · 5 `DevcruMfaConfig` (GlobalConfiguration + admin jelly).
 
 ## Task 6 target (from plan)
