@@ -1,0 +1,299 @@
+<?jelly escape-by-default='false'?>
+<!--
+  The MFA second-factor page (MfaController index view, mounted at
+  <root>/securityRealm/mfa).
+
+  Single form: one code field for either a 6-digit TOTP or an 8-character
+  email code; when the email factor is enrolled, a "send code" action with a
+  visible cooldown countdown. Both POSTs carry the core CSRF crumb; both
+  return JSON. On success the page navigates to the server-validated
+  redirect target from the JSON (never the raw Referer) — the "no dead
+  redirect / no open redirect" fix.
+
+  escape-by-default='false' so the inline script/style text
+  survives verbatim (default escaping would XML-mangle the JS, where '&amp;'
+  is a syntax error); the only dynamic text (masked email, issuer,
+  crumb) is escaped by Jelly for the x:out text values. The script body is
+  wrapped in the standard //<![CDATA[ ... //]]> fence: it is required for
+  the XML (Jelly) side because the JS contains raw '&lt;' comparisons, and in
+  the browser the fence reads as an ordinary line comment.
+  Self-contained page: no external CSS/JS/CDN, no core layout dependency.
+-->
+<j:jelly xmlns:j="jelly:core" xmlns:x="jelly:xml" xmlns:st="jelly:stapler">
+  <st:setHeader name="Cache-Control" value="no-cache,no-store,must-revalidate"/>
+  <st:setHeader name="X-Content-Type-Options" value="nosniff"/>
+  <x:doctype name="html"/>
+  <html lang="en">
+    <head>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1"/>
+      <meta name="robots" content="noindex,nofollow"/>
+      <title>MFA verification — Jenkins</title>
+      <style>
+        :root { color-scheme: light dark; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #0b0d12;
+          color: #e8eaed;
+          padding: 24px;
+        }
+        .card {
+          width: 100%;
+          max-width: 420px;
+          background: #161a22;
+          border: 1px solid #232836;
+          border-radius: 12px;
+          padding: 28px 28px 24px;
+          box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+        }
+        h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+        .sub { font-size: 13px; color: #9aa4b2; margin: 0 0 22px; }
+        label { display: block; font-size: 13px; color: #c3cad4; margin-bottom: 6px; }
+        .code { display: flex; gap: 8px; }
+        .code input[type=text] {
+          flex: 1;
+          font-size: 20px;
+          letter-spacing: 4px;
+          text-align: center;
+          padding: 12px 10px;
+          border-radius: 8px;
+          border: 1px solid #2f3748;
+          background: #0f1218;
+          color: #e8eaed;
+          font-variant-numeric: tabular-nums;
+        }
+        .code input[type=text]:focus { outline: none; border-color: #4b8cff; }
+        .btn {
+          font-size: 14px;
+          font-weight: 600;
+          padding: 12px 16px;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          cursor: pointer;
+        }
+        .btn-primary { background: #1f6feb; color: #ffffff; }
+        .btn-primary:disabled { background: #223355; color: #7d8696; cursor: not-allowed; }
+        .btn-ghost { background: transparent; color: #8ab4ff; border-color: #2f3a55; }
+        .btn-ghost:disabled { color: #6a7280; border-color: #232836; cursor: not-allowed; }
+        .msg { font-size: 13px; margin: 0 0 16px; min-height: 18px; }
+        .msg.error { color: #ff8a8a; }
+        .msg.ok { color: #7ee39a; }
+        .msg.hidden { visibility: hidden; }
+        .divider { display: flex; align-items: center; gap: 12px; color: #5b6473; font-size: 12px; margin: 20px 0; }
+        .divider::before, .divider::after { content: ""; height: 1px; background: #232836; flex: 1; }
+        .email .who { font-size: 13px; color: #c3cad4; margin: 0 0 8px; }
+        .email .who b { color: #ffffff; font-family: monospace; font-weight: 600; }
+        .row { display: flex; gap: 10px; align-items: center; }
+        .count { font-size: 13px; color: #9aa4b2; font-variant-numeric: tabular-nums; }
+        .hint { font-size: 12px; color: #5b6473; margin: 14px 0 0; line-height: 1.5; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>MFA verification — <x:out value="${it.issuer}"/></h1>
+        <p class="sub">Enter a code to finish signing in to Jenkins.</p>
+
+        <div id="msg" class="msg hidden" role="alert"></div>
+
+        <form id="verifyForm" autocomplete="off" novalidate="novalidate">
+          <label for="code">Verification code</label>
+          <div class="code">
+            <input type="text" id="code" name="code" inputmode="numeric"
+                   pattern="[0-9]{6}|[2-9A-HJ-NP-Z]{8}" maxlength="9"
+                   placeholder="••••••" autofocus="autofocus"/>
+            <button type="submit" id="verifyBtn" class="btn btn-primary">Verify</button>
+          </div>
+          <input type="hidden" name="${it.crumbField}" value="${it.crumbValue}"/>
+        </form>
+
+        <div class="divider">or</div>
+
+        <j:if test="${it.hasEmailFactor()}">
+          <div class="email">
+            <p class="who">Send a one-time code to
+              <b><x:out value="${it.maskedEmail}"/></b></p>
+            <div class="row">
+              <button type="button" id="resendBtn" class="btn btn-ghost">Send code</button>
+              <span id="cooldown" class="count" hidden="hidden"></span>
+            </div>
+          </div>
+        </j:if>
+        <j:if test="${!it.hasEmailFactor()}">
+          <p>
+            No email factor is enrolled for this account — use your
+            authenticator app above. Sign in and use your security profile to
+            add email-code MFA.
+          </p>
+        </j:if>
+
+        <p class="hint">5 wrong codes inside 30 minutes locks this account for
+          15 minutes. A successful check remembers this browser for the
+          configured window.</p>
+      </div>
+
+      <script>
+        //<![CDATA[
+        (function () {
+          "use strict";
+          function $(id) { return document.getElementById(id); }
+          var form = $("verifyForm");
+          var codeInput = $("code");
+          var msgEl = $("msg");
+          var verifyBtn = $("verifyBtn");
+          var resendBtn = $("resendBtn");
+          var cooldownEl = $("cooldown");
+          var crumbInput = form.querySelector("input[type=hidden]");
+          var lockUntil = 0;
+
+          var MESSAGES = {
+            wrong_code: "That code is not correct.",
+            no_pending_code: "No code is waiting for you — send a new one below.",
+            expired: "That code has expired — send a new one below.",
+            not_enrolled: "This account has no 2FA factors enrolled.",
+            not_authenticated: "Sign in first, then complete verification.",
+            email_not_enrolled: "Email codes are not enrolled for this account.",
+            resend_cooldown: "Please wait before requesting another code.",
+            server_error: "Something went wrong on the server. Try again."
+          };
+          var LOCKED = "locked";
+
+          function now() { return Date.now(); }
+          function showMsg(kind, text) {
+            msgEl.className = "msg " + kind;
+            msgEl.textContent = text;
+          }
+          function hideMsg() {
+            msgEl.className = "msg hidden";
+            msgEl.textContent = "";
+          }
+          // Drives the visible countdown span AND the lockUntil timer. The
+          // timer is the source of truth for re-enabling the buttons; the
+          // span is absent for accounts without the email factor, so every
+          // write is guarded.
+          function startCountdown(seconds) {
+            lockUntil = now() + seconds * 1000;
+            var t0 = now();
+            if (cooldownEl) { cooldownEl.hidden = false; }
+            function tick() {
+              var left = Math.max(0, Math.ceil((lockUntil - now()) / 1000));
+              if (left <= 0) {
+                lockUntil = 0;
+                if (cooldownEl) {
+                  cooldownEl.hidden = true;
+                  cooldownEl.textContent = "";
+                }
+                refreshButtons();
+                return;
+              }
+              if (cooldownEl) {
+                cooldownEl.textContent = "Try again in " + left + "s";
+              }
+              refreshButtons();
+              setTimeout(tick, 1000);
+            }
+            tick();
+          }
+          function refreshButtons() {
+            var locked = lockUntil > now();
+            verifyBtn.disabled = locked;
+            if (resendBtn) { resendBtn.disabled = locked; }
+          }
+
+          function formData(payload) {
+            var data = {};
+            if (crumbInput) { data[crumbInput.name] = crumbInput.value; }
+            for (var k in payload) { if (payload.hasOwnProperty(k)) { data[k] = payload[k]; } }
+            return Object.keys(data).map(function (k) {
+              return encodeURIComponent(k) + "=" + encodeURIComponent(data[k]);
+            }).join("&");
+          }
+          function postForm(endpoint, payload) {
+            return new Promise(function (resolve, reject) {
+              var xhr = new XMLHttpRequest();
+              xhr.open("POST", endpoint, true);
+              xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+              xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+              xhr.onload = function () {
+                if (xhr.status !== 200) {
+                  reject({ error: "server_error", status: xhr.status });
+                  return;
+                }
+                try {
+                  resolve(JSON.parse(xhr.responseText));
+                } catch (e) {
+                  reject({ error: "server_error" });
+                }
+              };
+              xhr.onerror = function () { reject({ error: "server_error" }); };
+              xhr.send(formData(payload || {}));
+            });
+          }
+
+          form.addEventListener("submit", function (ev) {
+            ev.preventDefault();
+            if (lockUntil > now()) {
+              startCountdown(Math.ceil((lockUntil - now()) / 1000));
+              return;
+            }
+            hideMsg();
+            verifyBtn.disabled = true;
+            if (resendBtn) { resendBtn.disabled = true; }
+            postForm("postVerify", { code: codeInput.value.trim() }).then(function (res) {
+              if (res.ok) {
+                // Navigate ONLY to the server-validated target — never the
+                // raw Referer. The server already ran it through
+                // resolveRedirectTarget; this line is what makes the
+                // open-redirect guarantee hold end to end.
+                window.location.replace(res.redirect || "/");
+                return;
+              }
+              if (res.error === LOCKED && res.retrySeconds) {
+                showMsg("error", "Too many attempts. This account is locked to further tries.");
+                startCountdown(res.retrySeconds);
+                codeInput.value = "";
+              } else {
+                showMsg("error", MESSAGES[res.error] || MESSAGES.server_error);
+                refreshButtons();
+              }
+            })["catch"](function (err) {
+              showMsg("error", MESSAGES[err && err.error] || MESSAGES.server_error);
+              refreshButtons();
+            });
+          });
+
+          if (resendBtn) {
+            resendBtn.addEventListener("click", function () {
+              if (lockUntil > now()) {
+                startCountdown(Math.ceil((lockUntil - now()) / 1000));
+                return;
+              }
+              resendBtn.disabled = true;
+              postForm("postResendEmail", {}).then(function (res) {
+                if (res.ok) {
+                  showMsg("ok", "A fresh code is on its way. It stays valid for a few minutes.");
+                  startCountdown(res.cooldown || 60);
+                } else if (res.error === "resend_cooldown" && res.retrySeconds) {
+                  showMsg("error", MESSAGES.resend_cooldown);
+                  startCountdown(res.retrySeconds);
+                } else {
+                  showMsg("error", MESSAGES[res.error] || MESSAGES.server_error);
+                  refreshButtons();
+                }
+              })["catch"](function (err) {
+                showMsg("error", MESSAGES[err && err.error] || MESSAGES.server_error);
+                refreshButtons();
+              });
+            });
+          }
+        })();
+        //]]>
+      </script>
+    </body>
+  </html>
+</j:jelly>
