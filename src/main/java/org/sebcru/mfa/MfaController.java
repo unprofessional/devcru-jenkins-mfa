@@ -257,8 +257,11 @@ public class MfaController implements RootAction {
   // ---------------------------------------------------------------------
   // POST endpoints. Core's crumb filter + @RequirePOST guard them; this is
   // belt-and-suspenders on method, not on policy. The page embeds the hidden
-  // crumb field via core's `h` taglib (h.getCrumb / h.getCrumbRequestField),
-  // the same way core's own login.jelly does — so crumb policy stays in core.
+  // crumb field from the Java model (getCrumbField()/getCrumbValue()), not
+  // via the `h` taglib — the page is a self-contained document without an
+  // <l:view> wrapper, where the `h` variable is unbound — but the model
+  // calls the same core static (Functions.getCrumb), so crumb policy stays
+  // in core.
   // ---------------------------------------------------------------------
 
   /**
@@ -562,7 +565,12 @@ public class MfaController implements RootAction {
    * @param referer     the raw {@code Referer} header value (may be null/blank)
    * @param host        the site's current host name (from {@code getServerName})
    * @param port        the site's current port (from {@code getServerPort});
-   *                    compared only when the referer carries an explicit port
+   *                    compared only when the referer carries an explicit
+   *                    port. A port-less referer is accepted on host match
+   *                    alone — benign in practice: browsers put a port in a
+   *                    URL only when it is non-default, so on a single-origin
+   *                    Jenkins the (same-origin) referer arrives with the
+   *                    site's real port whenever one is non-default.
    * @param contextPath the Jenkins context path ("" for root-installed Jenkins)
    * @return an absolute in-site path (leading "/", includes {@code contextPath}),
    *         never empty; the root fallback when nothing valid applies
