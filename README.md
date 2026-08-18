@@ -23,3 +23,5 @@ mvn package        # → target/devcru-mfa.hpi
 ## Workflow
 
 All development on `develop`; `master` advanced only on explicit mads approval per step.
+
+**Testing standard: required BDD documentation for every test** — see [AGENTS.md](AGENTS.md).
