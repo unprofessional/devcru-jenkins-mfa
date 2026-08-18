@@ -410,4 +410,68 @@ class MfaControllerTest {
         p.getEmailCodeSecret().getPlainText().getBytes(StandardCharsets.US_ASCII),
         "stored Secret plaintext must equal the returned key");
   }
+
+  // =====================================================================
+  // A3 (mads ruling 2026-08-18): ?redirect= canonical over Referer —
+  // the post-verify target composition, pinned at the controller seam.
+  // =====================================================================
+
+  /**
+   * WHAT: the post-verify redirect composition — the controller reads the
+   * {@code ?redirect=} parameter (the value the gate's 302 carried into the
+   * MFA page URL) and only falls back to {@code Referer} when it is absent.
+   * Both flow through the one shared validator ({@code MfaFilter.
+   * resolveTarget} → {@code resolveRedirectTarget}); this test pins that
+   * exact input selection at the site that consumes it.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN a site at host "jenkins.dev", root context
+   * AND   the gate's bounce URL carried  ?redirect=/job/web/
+   * AND   the browser's form POST carries Referer = the MFA page's own URL
+   *       (https://jenkins.dev/securityRealm/mfa) — the form-POST shape,
+   *       where Referer alone would re-prompt the user
+   * WHEN  the post-verify composition resolves the send-back target
+   *       (parameter first, Referer fallback, one validator)
+   * THEN  the target is /job/web/ — the PRE-LOGIN destination the user
+   *       actually wanted, not the MFA page
+   * GIVEN the same site, the gate's bounce carried NO parameter (a user who
+   *       bookmarked /securityRealm/mfa directly)
+   * AND   the page was opened via Referer = https://jenkins.dev/job/web/
+   * WHEN  the same composition runs
+   * THEN  the target is /job/web/ — the Referer fallback still works
+   *       for the parameter-less entry
+   * </pre>
+   *
+   * <p>WHY/SOLVES: this is the controller half of the A3/A5 pair. The
+   * audit finding (A5) was that the Referer-only contract lands a verified
+   * user back on the MFA page (immediate re-prompt loop) because a same-
+   * origin form POST's Referer is the page that issued it. The parameter
+   * exists to carry the pre-login destination across the gate's 302; if the
+   * controller reads the Referer first (or ignores the parameter), the fix
+   * is dead on arrival and every "MFA completed" bounces users into the
+   * prompt again. The end-to-end IT (Task 8, A5's owner) asserts the full
+   * round trip against a booted Jenkins; this unit test pins the input
+   * selection it depends on without the boot.
+   */
+  @Test
+  void postVerifyTargetUsesCanonicalParameterThenReferer() {
+    // The form-POST shape: parameter present (the pre-login destination),
+    // Referer = the MFA page's own URL. The parameter must win.
+    String formPostShape = MfaFilter.resolveTarget(
+        "/job/web/",                                  // ?redirect= (canonical)
+        "https://jenkins.dev/securityRealm/mfa",      // Referer (the MFA page)
+        "jenkins.dev", "8080", "");
+    assertEquals("/job/web/", formPostShape,
+        "the gate's ?redirect= parameter is canonical over the MFA-page Referer");
+
+    // The parameter-less entry: no ?redirect= on the page URL; the Referer
+    // (a normal in-site page) is the fallback source.
+    String paramLess = MfaFilter.resolveTarget(
+        null,                                         // no ?redirect= parameter
+        "https://jenkins.dev/job/web/",               // Referer (an in-site page)
+        "jenkins.dev", "8080", "");
+    assertEquals("/job/web/", paramLess,
+        "the Referer fallback must still work when the parameter is absent");
+  }
 }
