@@ -17,14 +17,14 @@ rate limiter / lockout (sliding 30-minute failure window, 5 attempts,
 15-minute lockout that cannot be extended by retries) — the admin
 configuration surface (Manage Jenkins → Security: policy, issuer, trust
 windows, rate-limit knobs, exempt users), and the MFA controller: the login
-screen at `/securityRealm/mfa` with its two POST endpoints (TOTP or email
+the login screen at `/securityRealm/mfa` with its two POST endpoints (TOTP or email
 code verification, and email-code resend via Jenkins' standard Mailer), the
 shape-based factor router, the open-redirect-safe "back to where you were"
 redirect resolver, and session fix-up on success. The redirect resolver's
 decision table is unit-tested; the endpoint glue is covered by the Task 8
 integration test. The login gate filter (interception), enrolment/
 management UI, and end-to-end mail round trips land per the plan in this
-repo ([`todo/2026-08-17-jenkins-mfa-plugin.md`](todo/2026-08-17-jenkins-mfa-plugin.md)).
+repo ([`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md)).
 
 Two Task 6 deviations from the plan sketch, both flagged in the commit and
 in the code: (1) the controller mounts as a `hudson.model.RootAction`
@@ -35,10 +35,17 @@ resend button cannot be turned into an open mail relay.
 
 ## Project documentation (in this repo)
 
+All project docs live under [`docs/`](docs/): `docs/plans/` holds
+implementation plans, `docs/todo/` active work notes, `docs/done/` stale
+docs with historical reference, and
+[`docs/architecture/`](docs/architecture/README.md) the
+architecture & design-decision record used to audit the code.
+
 | File | What it is |
 |---|---|
-| [`todo/2026-08-17-jenkins-mfa-plugin.md`](todo/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
-| [`todo/2026-08-18-task7-handoff.md`](todo/2026-08-18-task7-handoff.md) | Fresh-session handoff note for Task 7 (the gate filter): where the build stands after Task 6, the re-verified 2.528.3-core API findings (incl. three corrections to the plan sketch — no `JenkinsUtil`, `jenkins.security.*` package, jakarta-only filter), the existing seams, and the execution order. |
+| [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
+| [`docs/todo/2026-08-18-task7-handoff.md`](docs/todo/2026-08-18-task7-handoff.md) | Fresh-session handoff note for Task 7 (the gate filter): where the build stands after Task 6, the re-verified 2.528.3-core API findings (incl. three corrections to the plan sketch — no `JenkinsUtil`, `jenkins.security.*` package, jakarta-only filter), the existing seams, and the execution order. |
+| [`docs/architecture/`](docs/architecture/README.md) | Architecture & design-decision record (abstractions, state-management boundaries, Jenkins integration surface, auth/security seams). The audit companion. |
 
 
 ## Practical usage — what end users should expect

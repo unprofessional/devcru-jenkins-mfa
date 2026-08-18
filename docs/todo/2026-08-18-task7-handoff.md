@@ -22,7 +22,7 @@ If you're reading this after a context reset: nothing is committed in the workin
 
 - Branch `develop` at `f705ea3` (`feat(controller): MFA login page + verify/resend
   endpoints (Task 6)`), CI green. Repo clean.
-- Plan (in-repo): [`todo/2026-08-17-jenkins-mfa-plugin.md`](2026-08-17-jenkins-mfa-plugin.md)
+- Plan (in-repo): [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](../plans/2026-08-17-jenkins-mfa-plugin.md)
   — **Task 7 section ≈ lines 531–565**. Read it first thing.
 - Tasks landed so far (all in `git log` on develop): 0 scaffold · 1 `Totp` (RFC 6238) ·
   2 `MfaUserProperty` · 3 `EmailCodeIssuer`+`EmailSender` · 4 `TrustStore`+`RateLimiter`
