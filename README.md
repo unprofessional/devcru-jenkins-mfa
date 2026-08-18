@@ -38,7 +38,7 @@ resend button cannot be turned into an open mail relay.
 | File | What it is |
 |---|---|
 | [`todo/2026-08-17-jenkins-mfa-plugin.md`](todo/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
-| [`todo/2026-08-18-task6-handoff.md`](todo/2026-08-18-task6-handoff.md) | Fresh-session handoff note for Task 6: where the build stands, the verified 2.528.3-core API findings (incl. the `GlobalAction` → `RootAction` deviation), the existing seams, and the proposed execution order. |
+| [`todo/2026-08-18-task7-handoff.md`](todo/2026-08-18-task7-handoff.md) | Fresh-session handoff note for Task 7 (the gate filter): where the build stands after Task 6, the re-verified 2.528.3-core API findings (incl. three corrections to the plan sketch — no `JenkinsUtil`, `jenkins.security.*` package, jakarta-only filter), the existing seams, and the execution order. |
 
 
 ## Practical usage — what end users should expect
