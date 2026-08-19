@@ -9,7 +9,7 @@ paywalled UI) on `jenkins.devcru.org` (Jenkins 2.577, Local Security Realm).
 
 ## Status
 
-Tasks 0–7 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
+Tasks 0–8 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
 RFC 4226/6238 vectors), per-user factor state, the email-code factor
 (generation, hashing, single-use, expiry, resend throttle), the two gate
 brains — the remembered-device trust (24 h policy floor) and the per-user
@@ -17,7 +17,8 @@ rate limiter / lockout (sliding 30-minute failure window, 5 attempts,
 15-minute lockout that cannot be extended by retries) — the admin
 configuration surface (Manage Jenkins → Security: policy, issuer, trust
 windows, rate-limit knobs, exempt users), the MFA controller (the login
-screen at `/securityRealm/mfa` with its two POST endpoints — TOTP or email
+screen at the plugin's MFA page — `/mfa` on the live box, with its two POST
+endpoints — TOTP or email
 code verification, and email-code resend via Jenkins' standard Mailer — the
 shape-based factor router, the open-redirect-safe "back to where you were"
 redirect resolver, and session fix-up on success), and the MFA gate filter
@@ -28,18 +29,21 @@ verified-session-OR-remembered-trust) and bounces everyone else to the MFA
 page with their real destination carried in the URL. The gate's decision
 table is unit-tested branch-by-branch; the filter's live-registration and
 302 wiring are exercised by the plugin's own `InjectedTest` Jenkins-in-JVM
-boot, which now runs with the filter active. Enrolment/management UI
-(Task 9) and end-to-end mail round trips (Task 8) land per the plan in this
-repo ([`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md)).
+boot, which now runs with the filter active. Only the enrolment/management
+UI (Task 9) remains outstanding per the plan in this repo ([`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md)).
 
 Two Task 6 deviations from the plan sketch, both flagged in the commit and
-in the code: (1) the controller mounts as a `hudson.model.RootAction`
-because `jenkins.model.GlobalAction` does not exist in the resolved
-2.528.3 core, and (2) `postResendEmail` takes no destination parameter —
-codes go to the account's registered mailbox and only there, so the
-resend button cannot be turned into an open mail relay.
+in the code (a third, the mount move `securityRealm/mfa` → `/mfa`, is
+recorded with Task 8 above): (1) the controller mounts as a
+`hudson.model.RootAction` because `jenkins.model.GlobalAction` does not
+exist in the resolved 2.528.3 core (its path was subsequently moved by
+mads's Task 8 ruling — see above), and (2) `postResendEmail` takes no
+destination parameter — codes go to the account's registered mailbox and
+only there, so the resend button cannot be turned into an open mail relay.
 
 **Task 7 (the gate):** registered as a servlet filter at startup, it enforces the gate on every request. The full decision chain (kill switch → API token → anonymous → core error pages → auth-flow/static allow-list → policy → exemption list → unenrolled → verified-session-OR-remembered-trust) is unit-tested branch-by-branch, and the plugin's own `InjectedTest` harness now boots a real Jenkins on every build with the filter live (Task 8's dedicated end-to-end IT builds on that). Landing Task 7 surfaced three corrections to the plan sketch (no `JenkinsUtil` in core 2.528.3 — current-user detection is via `User.get2(Jenkins.getAuthentication2())`; the api-token request-marker class sits in `jenkins.security.*`, not `hudson.security.*`; the filter must be `jakarta.servlet.Filter`, not `javax`), plus one deliberate extension: core error-page dispatches (404/500) are passed through so a broken URL is never turned into an MFA challenge loop.
+
+**Task 8 (end-to-end IT of the live gate):** `MfaFilterIT` boots a real Jenkins (in-JVM, HPSR local realm with real password users — the production shape) and drives the *whole wire*: password login → gate 302 → MFA page → form POST → verified session → the protected page, plus a captured-mail round trip to the registered mailbox. It fired on **five defects while doing so**, all fixed (TECH_DEBT A16/A17/A18/A20 in the plugin, A19 in the harness itself): (1) *A16* — every request was evaluating its path as `/` — `getServletPath()` is empty in this filter position on 2.528.3 — a silent infinite-302 loop for every enrolled user, fixed with a `getRequestURI()` − context-path decomposition; (2) *A17* — the MFA page's mount `securityRealm/mfa` was **swallowed by the live local realm's own `ModelObject` mount** — a 404 for every enrolled user's gate bounce on any local-realm deployment (i.e. this one) — fixed by moving the mount to the single free segment **`/mfa`**, per mads's ruling of 2026-08-19 (controller, allow-list, redirect validator, unit pins, IT, and page all moved with it); (3) *A18* — the page emitted `<x:out>`, a tag that does not exist on this runtime's Jelly, and 500'd on render — now `j:out` (`jelly:core`, the escape tag core's own views use); (4) *A19* — the IT's own `rawGet` helper was silently following the bounce's 302, so four rounds of "the gate 404/500s" were actually the *destination* page's status — the gate's 302 was correct throughout; (5) *A20* — `postVerify`/`postResendEmail` had **no dispatch token at all** (Stapler auto-maps only get/is/do-prefixed methods, and `@RequirePOST` is policy, not routing), so the verify/resend buttons would have been dead for every user — now `@WebMethod`-declared with the exact tokens the page's JS already posts. The suite is green 7/7: TOTP flow with the `?redirect=` round trip (A5's booted assertion), the email-code flow to the registered mailbox only, the API-token attribute re-pin (A15's Bearer gap is documented in the case), the 5-wrong-code lockout, the policy-OFF kill switch, the remembered-device fresh login, and the error-dispatch no-loop guard.
 
 ## Project documentation (in this repo)
 
@@ -54,7 +58,9 @@ architecture & design-decision record used to audit the code.
 | [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
 | [`docs/done/2026-08-18-task7-handoff.md`](docs/done/2026-08-18-task7-handoff.md) | Landed Task 7's handoff note (gate filter): the re-verified 2.528.3-core API findings (incl. three corrections to the plan sketch — no `JenkinsUtil`, `jenkins.security.*` package, jakarta-only filter), the seams it used, the execution order, and the two registration deviations it turned into (`EXTENSIONS_AUGMENTED` not `STARTED`; plain `@Extension` not `hudson.Plugin`) — moved to `done/` when Task 7 landed. |
 | [`docs/architecture/`](docs/architecture/README.md) | Architecture & design-decision record (abstractions, state-management boundaries, Jenkins integration surface, auth/security seams). The audit companion. |
-| [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A14, with status/owner per item). Rulings from mads recorded 2026-08-18: `current()` is authoritative (A1), both minting paths for `emailCodeSecret` (A2), `?redirect=` canonical over `Referer` (A3), Task 9 consumes-and-resets the telemetry fields (A7/A8). |
+| [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A21, with status/owner per item). Rulings from mads: 2026-08-18 (`current()` is authoritative — A1; both minting paths for `emailCodeSecret` — A2; `?redirect=` canonical over `Referer` — A3; Task 9 consumes-and-resets the telemetry fields — A7/A8) and 2026-08-19 (mount move `securityRealm/mfa` → `mfa` — A17; Bearer to be implemented home-grown, no dependency — A15, tracked as A21). Task 8 also added the booted-IT defects A16 (getServletPath 302 loop), A17 (realm mount collision), A18 (`<x:out>` render 500), A19 (IT `rawGet` followed redirects), A20 (endpoints had no dispatch token). |
+| [`docs/done/2026-08-18-task8-handoff.md`](docs/done/2026-08-18-task8-handoff.md) | Landed Task 8's handoff note (end-to-end IT of the live gate): the two production defects it caught (A16 the getServletPath 302 self-loop, A17 the HPSR `securityRealm/mfa` mount collision — ruled 2026-08-19 to move to `/mfa`), the verified IT mechanics (context path, `c.login`, HPSR enrolment, form-by-id, JSON envelopes), the economics correction (~5 s per case, not minutes), and the A5/A15 corrections — moved to `done/` when Task 8 landed. |
+| [`docs/todo/2026-08-19-task9-handoff.md`](docs/todo/2026-08-19-task9-handoff.md) | **Written 2026-08-19 for a wiped-context handoff before Task 9:** everything a fresh reader needs to execute Task 9 (user-facing factor management on *Manage account → Security*) — the verified state of every class the task touches, the IT mechanics to extend, the six-endpoint contract, the **view-path correction** (`MfaUserProperty/config.jelly`, not `views/MfaUserProperty.jelly` — a wrong path fails *silently*), the no-nested-`f:form` rule, the single-POST enroll commit, the `@WebMethod`-per-endpoint rule (A20), the A2 single mint seam, the A15/A21 ruling and its spec, recurring pitfalls, and the read-first list. Read this first when starting Task 9. |
 
 
 ## Practical usage — what end users should expect
@@ -66,12 +72,16 @@ architecture & design-decision record used to audit the code.
 > that enforces all of it on a live install are implemented and tested;
 > mail codes are delivered through the standard Jenkins Mailer (global SMTP
 > config) once that plugin — preinstalled on any real instance — is present.
-> The gate is real: on a live instance an enrolled user is bounced to the
-> MFA page after their password login until the second factor is proven,
-> while API tokens, exempt service accounts, and unenrolled users are
-> unaffected, and the kill switch is a setting, not an uninstall. Only the
-> self-service enrollment/management UI (Task 9) is not a shipped screen yet
-> — a user who has no factors enrolled cannot lock themselves in or out
+> The gate is real and is verified end to end on a booted Jenkins (Task 8's
+> IT): on a live instance an enrolled user is bounced to the MFA page after
+> their password login until the second factor is proven, and the whole wire
+> — password login, the 302, the MFA page, the verify/resend POSTs, the
+> mail round trip to the registered mailbox, the session rotation, and the
+> "back to where you were" round trip — is asserted green, while API tokens,
+> exempt service accounts, and unenrolled users are unaffected, and the kill
+> switch is a setting, not an uninstall. Only the self-service
+> enrollment/management UI (Task 9) is not a shipped screen yet — a user who
+> has no factors enrolled cannot lock themselves in or out
 > (there is nothing to gate them with), and the flow described below is the
 > committed behaviour contract end to end.
 

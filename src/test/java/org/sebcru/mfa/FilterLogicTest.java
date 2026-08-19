@@ -207,7 +207,7 @@ class FilterLogicTest {
    * <pre>
    * GIVEN policy = REQUIRED, a non-exempt enrolled user, no session, no trust
    * WHEN  the request path is any of: /login, /j_acegi_securityCheck,
-   *       /securityRealm, /securityRealm/mfa, /images/logo.png,
+   *       /mfa, /images/logo.png,
    *       /static/2.528/js/core.js
    * THEN  each is PASS (the login flow and the MFA page itself must be
    *                   reachable for the user to ever get verified)
@@ -218,7 +218,7 @@ class FilterLogicTest {
    * </pre>
    *
    * <p>WHY/SOLVES: the allow-list is the "the user can actually complete
-   * MFA" half of the gate — a regression that drops /securityRealm/mfa
+   * MFA" half of the gate — a regression that drops /mfa
    * breaks the entire plugin (the bounce target itself gets bounced); a
    * regression that widens the allow-list past login/static assets quietly
    * ungates real pages. The null case pins the fail-closed posture: when we
@@ -227,7 +227,7 @@ class FilterLogicTest {
   @Nested
   class PathAllowList {
     private static final Object[] ALLOWED = {"/login", "/j_acegi_securityCheck",
-        "/securityRealm", "/securityRealm/mfa", "/images/logo.png",
+        "/mfa", "/images/logo.png",
         "/static/2.528/js/core.js", "/scripts/something.js", "/css/theme.css",
         "/adjuncts/123/xyz", "/logout"};
 
@@ -423,7 +423,7 @@ class FilterLogicTest {
    *       that would REDIRECT at step 9)
    * WHEN  they are an API token (step 2)
    * THEN  PASS — even though they are enrolled
-   * WHEN  the request is on /securityRealm/mfa (step 5)
+   * WHEN  the request is on /mfa (step 5)
    * THEN  PASS — the MFA page is reachable for the very user who needs it
    * GIVEN the same user but NOT an API token and NOT on an allowed path
    * WHEN  they are exempt (step 7)
@@ -448,7 +448,7 @@ class FilterLogicTest {
     // Allow-list beats enrolment (5 before 7/9).
     assertEquals(MfaFilterDecision.PASS,
         MfaFilter.decision(Policy.REQUIRED,
-            false, false, false, false, false, "/securityRealm/mfa", false));
+            false, false, false, false, false, "/mfa", false));
     // Exemption beats enrolment + step 9 (7 before 9).
     assertEquals(MfaFilterDecision.PASS,
         MfaFilter.decision(Policy.REQUIRED,
@@ -474,7 +474,7 @@ class FilterLogicTest {
    * <pre>
    * GIVEN a site at host "jenkins.dev", root context
    * WHEN  the parameter is the in-site path  /job/web/
-   * AND   the Referer is the MFA page's own URL  https://jenkins.dev/securityRealm/mfa
+   * AND   the Referer is the MFA page's own URL  https://jenkins.dev/mfa
    *       (the form-POST shape — Referer alone would re-prompt the user)
    * THEN  the resolved target is /job/web/ — the PARAMETER wins, not the
    *                   Referer
@@ -493,7 +493,7 @@ class FilterLogicTest {
    * so a Referer-only implementation would land a verified user back on
    * the MFA page (an immediate re-prompt loop) — the A5 audit finding this
    * closes. Branches 2 and 3 protect the fallback so a page opened without
-   * the parameter (e.g. a user bookmarking /securityRealm/mfa) still gets
+   * the parameter (e.g. a user bookmarking /mfa) still gets
    * a sensible send-back.
    */
   /**
@@ -531,7 +531,7 @@ class FilterLogicTest {
     // 1. The form-POST shape: parameter present, Referer = the MFA page.
     assertEquals("/job/web/",
         MfaFilter.resolveTarget("/job/web/",
-            "https://jenkins.dev/securityRealm/mfa",
+            "https://jenkins.dev/mfa",
             "jenkins.dev", "8080", ""));
     // 2. Parameter absent → Referer fallback.
     assertEquals("/job/web",
@@ -564,7 +564,7 @@ class FilterLogicTest {
    *
    * <p>WHY/SOLVES: the parameter is attacker-controllable in a way the
    * Referer is also attacker-controllable — an attacker can set a victim's
-   * browser to GET /securityRealm/mfa?redirect=https://evil.com/ and have
+   * browser to GET /mfa?redirect=https://evil.com/ and have
    * the victim's successful MFA send them to the attacker's site. Routing
    * the parameter through the one existing validator (rather than a
    * second, looser, "parameters are probably fine" path) is what makes the

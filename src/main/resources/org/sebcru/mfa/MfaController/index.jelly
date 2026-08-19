@@ -1,7 +1,10 @@
 <?jelly escape-by-default='false'?>
 <!--
   The MFA second-factor page (MfaController index view, mounted at
-  <root>/securityRealm/mfa).
+  <root>/mfa — moved off /securityRealm by Task 8's Defect B ruling: under a
+  ModelObject-backed local realm (HPSR, the live box's shape) the realm's
+  own mount squats the securityRealm top-level node and swallowed this
+  page (Stapler 404 for /mfa under the realm).).
 
   Single form: one code field for either a 6-digit TOTP or an 8-character
   email code; when the email factor is enrolled, a "send code" action with a
@@ -15,8 +18,14 @@
 
   escape-by-default='false' so the inline script/style text
   survives verbatim (default escaping would XML-mangle the JS, where '&amp;'
-  is a syntax error); the only dynamic text (masked email, issuer,
-  crumb) is escaped by Jelly for the x:out text values. The script body is
+  is a syntax error); the two dynamic TEXT values (masked email, issuer) are
+  escaped by Jelly's own j:out (jelly:core) — the x:out tag that used to sit
+  in those spots is not a tag on this runtime (the Task 8 IT caught the 500:
+  "<x:out> This tag does not understand the 'value' attribute"). The crumb
+  attribute is interpolated raw, exactly as core's own crumb-bearing views
+  (signup.jelly, authenticate-security-token.jelly) do — the default crumb
+  token is base62, never XML-special, and an attribute value cannot itself
+  contain a nested tag. The script body is
   wrapped in the standard //<![CDATA[ ... //]]> fence: it is required for
   the XML (Jelly) side because the JS contains raw '&lt;' comparisons, and in
   the browser the fence reads as an ordinary line comment.
@@ -99,7 +108,7 @@
     </head>
     <body>
       <div class="card">
-        <h1>MFA verification — <x:out value="${it.issuer}"/></h1>
+        <h1>MFA verification — <j:out value="${it.issuer}"/></h1>
         <p class="sub">Enter a code to finish signing in to Jenkins.</p>
 
         <div id="msg" class="msg hidden" role="alert"></div>
@@ -120,7 +129,7 @@
         <j:if test="${it.hasEmailFactor()}">
           <div class="email">
             <p class="who">Send a one-time code to
-              <b><x:out value="${it.maskedEmail}"/></b></p>
+              <b><j:out value="${it.maskedEmail}"/></b></p>
             <div class="row">
               <button type="button" id="resendBtn" class="btn btn-ghost">Send code</button>
               <span id="cooldown" class="count" hidden="hidden"></span>

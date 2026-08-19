@@ -5,11 +5,14 @@
 > [`docs/architecture/README.md`](../architecture/README.md); split out here
 > on 2026-08-18 so the findings are a **working list with statuses**, not a
 > read-only appendix. **Rulings received from mads 2026-08-18 (see
-> "Rulings recorded" below); fixes land in their owner tasks.**
+> "Rulings recorded" below), 2026-08-19 (Task 8's Defect B mount move —
+> see A17); fixes land in their owner tasks.**
 >
 > **How this file works.**
 > - Each item keeps its audit number (A1–A14) so cross-references in the
->   architecture record, the plan, and the Task 7 handoff stay valid.
+>   architecture record, and the task handoffs stay valid (A15 added from the
+>   Task 8 IT's named Bearer gap; A16/A17 are Task 8's two production
+>   defects, added 2026-08-19).
 > - **Status:** `RULING-RECORDED` (mads has decided; fix lands in the named
 >   owner task / commit) · `OPEN` (needs a decision or code change, no
 >   ruling yet) · `CTX` (no action — context for the next reviewer) ·
@@ -142,8 +145,7 @@ every property carries `0` (implies TOTP) even for email-only users.
 ## OPEN — no ruling yet
 
 ### A5 — "Back to where you were" resolves to the MFA page, not the pre-login page
-**Status: RESOLVED (plumbing, Task 7); Task 8 IT assertion still owed (see
-below).** **Owner: Task 7 (plumbing) + Task 8 (IT assertion).**
+**Status: RESOLVED (Task 8 — the IT assertion landed green).** **Owner: Task 7 (plumbing) + Task 8 (IT assertion).**
 
 A same-origin POST carries the *MFA page's own URL* as its `Referer`
 (`/securityRealm/mfa` is the page issuing the form POST). So the
@@ -159,10 +161,208 @@ plumbing.
 > re-attaches it to every XHR POST, and `postVerify` consumes the parameter
 > first with `Referer` as the fallback (covering the parameter-less entry,
 > e.g. a bookmarked MFA page). The open-redirect guarantee now holds
-> end-to-end through both carriers. **Still owed (Task 8):** the
-> integration test asserting the full pre-login-URL round trip against a
-> booted Jenkins — the unit pins cover the input selection and the
-> validator, not the live boot path (session flag + JS + POST + 302).
+> end-to-end through both carriers.
+>
+> **Landed (Task 8):** `MfaFilterIT.totpFlowEndToEndWithRedirectRoundTrip`
+> asserts the full round trip against a booted Jenkins: no-carrier bounce
+> falls back to the context root (never a dead path); an in-site
+> `?redirect=` parameter carries EXACTLY that job path through the 302
+> Location → MFA page form → `postVerify` JSON `redirect` (A3 — the
+> parameter is canonical on the wire); the session id rotates on success
+> (anti-fixation) and the verified session reaches the protected path with
+> no re-prompt. The signed contract is narrower than "pre-login URL
+> preservation" (see the Task 8 handoff's A5 correction — with no carrier,
+> core owns the pre-login destination, and the gate's contract is the root
+> fallback).
+
+### A15 — API-token exemption: plan's `Bearer` case has no core authenticator on 2.528.3
+**Status: RESOLVED BY RULING (mads, 2026-08-19) — implementation owed as a
+standalone task (A21).** **Owner: the Bearer task (no filter change on the
+gate side; the gate already exempts the request attribute).**
+
+The plan's Task 8 IT case 3 specified re-pinning the API-token exemption
+against a real security chain with `Authorization: *** jenkins-core
+2.528.3 has **no Bearer token authenticator** (verified against the resolved
+artifact — only the `BasicHeader*` token classes exist; a full-string search
+of the jar finds no Bearer at all). The IT therefore
+pins the **Basic** `user:token` header end to end
+(`MfaFilterIT.apiTokenExemptFromGate` — 200, no gate bounce), and the
+exemption itself is the in-chain request attribute
+`jenkins.security.BasicHeaderApiTokenAuthenticator` — which works for
+whatever authenticator sets it.
+
+**Ruling (mads, 2026-08-19):** implement Bearer — but *not* as a bet on
+core gaining it (A15 option (a) was rejected in spirit) and *not* by
+pulling a third-party dependency. Spring Security 6.5.3 is in the
+dependency tree only as a `provided` *transitive* of jenkins-core, and
+Jenkins does not run Spring Security's web filter chain (the Spring jars
+serve the type system only: `Authentication`, `GrantedAuthority`) — so
+"built-in" is the wrong frame. The implementation, tracked as A21, is a
+small `jakarta.servlet.Filter` registered earliest (ahead of the gate):
+read `Authorization: *** strip the `Bearer ` prefix, resolve the user's
+`ApiTokenProperty.matchesPassword(…)` (the same core primitive
+`BasicHeaderApiTokenAuthenticator` uses under `Basic`), and on success
+set the request auth + the same api-token request attribute the gate
+already exempts — so no gate change is required on either outcome, as
+A15's original note promised.
+
+### A16 — `MfaFilter.targetPath()` evaluated every request as `/` (302 self-loop)
+**Status: RESOLVED (Task 8).** **Owner: Task 8 (IT exposed, filter fixed, same
+commit).**
+
+Task 8's end-to-end IT — the first test to drive the real gate over HTTP
+against a booted Jenkins — fired on a silent infinite-302 loop: every request
+(the MFA page included) 302'd to itself until HtmlUnit threw "Too many
+redirects". Root cause: `targetPath()` was built on
+`HttpServletRequest.getServletPath()`, which returns `""` at the
+`PluginServletFilter` position on the 2.528.3 embedded-Jetty/Stapler chain
+(filter runs before dispatch — live trace: `sp=[] ctx=[/jenkins]` on every
+gated request). Every request therefore evaluated as `/` → allow-list never
+matched. The unit suite (pure `decision()` over string paths) can structurally
+never catch this class — it pins the path the *filter computes*, not the
+computation.
+
+> **Red→green:** IT run 1, 6/7 red on "Too many redirects" + per-request
+> `TEMP-DIAG` trace capturing `uri`/`decision` per request → fix: in-site
+> path = `getRequestURI()` − `getContextPath()` (spec decomposition),
+> query folded, null/odd → `/` fail-closed; `MfaFilter`'s javadoc now carries
+> the "why not getServletPath()" so nobody simplifies it back. Green: 7/7.
+
+### A17 — MFA page mount `securityRealm/mfa` squatted by the live realm (404)
+**Status: RESOLVED (Task 8 — mads-ruled 2026-08-19).** **Owner: Task 8.**
+
+After A16, the IT's redirect-follow 404'd. Decoded Stapler route page in the
+404 body: `No matching rule was found on
+hudson.security.HudsonPrivateSecurityRealm for "/mfa"` — the *active realm*
+is a `ModelObject`, and Stapler mounts it at the top-level `securityRealm`
+node, which owns the whole prefix. On any local-realm deployment — the
+production shape of `jenkins.devcru.org` — every enrolled user's gate bounce
+404s. Invisible in Tasks 1–7 because every earlier harness used the default
+test realm (no ModelObject at that node); the IT matched production shape
+and exposed it.
+
+> **Ruling (mads, 2026-08-19):** agreed with the recommendation — move the
+> mount `securityRealm/mfa` → `mfa` ("I agree with your recommendation.
+> Proceed."). `mfa` is a free single segment: no core mount, nothing a realm
+> can squat, survives any realm shape.
+
+> **Landed (Task 8, this commit):** the full 6-point sweep —
+> `MfaController.getUrlName()` → `"mfa"` (+ deviation #3 with the 404
+> evidence); allow-list entry `/securityRealm` → `/mfa` (the seven IT cases
+> verified no IT case needs the realm's own mount tree post-auth; anonymous
+> reach of realm pages is already owned by step 3); `isSecurityPath` first-
+> segment set +`mfa` (a redirect *to* the MFA page degrades to root, else
+> post-verify loops back into the gate); the gate's 302 Location; the IT's
+> endpoint helper + Location pins; the jelly doc line. Unit pins
+> (`FilterLogicTest`/`MfaControllerTest`) moved with the path, semantics
+> kept. Green: 7/7.
+
+### A18 — MFA page 500'd on render: `<x:out>` is not a tag on this runtime
+**Status: RESOLVED (Task 8 — mads-ruled 2026-08-19).** **Owner: Task 8.**
+
+Once Defect B was fixed, every test that reached the MFA page over HTTP hit
+a 500: `JellyException: index.jelly:105 <x:out> This tag does not understand
+the 'value' attribute`. The Jelly on the 2.528.3 classpath
+(`org.jenkins-ci:commons-jelly` fork + `commons-jelly-tags-xml`) defines no
+`out` tag — there is no `org/apache/commons/jelly/tags/xml/OutTag.class`.
+The escape-output tag is `j:out` under `jelly:core` (the same tag core's own
+views use); `x:` is `jelly:xml`, its element set (`element`, `attribute`,
+`doctype`, `transform`) never included `out`. Invisible in Tasks 1–7 because
+`InjectedTest`'s Jelly-parse check validates structure, not serve-time
+execution — the page was served over HTTP for the first time in this IT.
+
+> **Landed (Task 8, this commit):** the page's two dynamic TEXT values
+> (issuer, masked email) moved from `<x:out value="…"/>` to
+> `<j:out value="…"/>`; the crumb attribute is interpolated raw, exactly as
+> core's own crumb-bearing views (`signup.jelly`,
+> `authenticate-security-token.jelly`) do — the default crumb token is
+> base62, never XML-special, and an attribute value cannot itself contain a
+> nested tag. With `escape-by-default='false'` on the page, the `j:out`
+> text positions are the one remaining XML-escape surface, so they are
+> deliberately core's tag. The doc comment names the failure signature so
+> nobody "restores" the x: prefix.
+
+### A19 — `MfaFilterIT`'s `rawGet` followed redirects despite its contract
+**Status: RESOLVED (Task 8).** **Owner: Task 8 (test-harness defect, not a
+filter defect).**
+
+`rawGet`'s Javadoc said "no redirect following", but
+`c.loadWebResponse(req)` follows 302s by default. For four consecutive
+failure rounds the "gate returns 404/500" readings were in fact the
+*destination* page's status (the MFA page's own 404, then its own 500) —
+the gate's 302 had been correct the whole time, and the page defects
+(A17/A18) were still genuine but were mis-attributed to the filter for two
+rounds. Fixed by explicitly toggling `setRedirectEnabled(false)` around
+`loadWebResponse` on the same client (a second client would have lost the
+session/cookies). Lesson pinned in the helper's Javadoc: in this harness a
+raw-status assertion must switch the client's redirect behaviour, there is
+no "raw by default".
+
+### A20 — MFA endpoints not URL-routable: `postVerify`/`postResendEmail` 404
+**Status: RESOLVED (Task 8).** **Owner: Task 8 (IT exposed, controller
+fixed, same commit).**
+
+Once A17–A19 were fixed, the IT's first ever *executed* verify POST 404'd.
+The booted 404 body is unambiguous: Stapler resolved `/mfa` to the
+`MfaController` and then reported `No matching rule was found on
+…MfaController for "/postVerify"`, listing its URL mappings — only the
+`getX` accessors. Stapler's dynamic-method dispatch auto-maps only
+get/is/do-prefixed methods (plus explicit `@WebMethod`); a method named
+bare `postVerify` exposes **no dispatch token at all**, and
+`@RequirePOST` is a *policy* guard (rejects non-POST) — it does not
+declare a URL. Production impact: with the page now reachable, **every
+user's verify and resend would have been a dead button** (the JS POSTs to
+relative `postVerify`/`postResendEmail`) — the IT caught it before
+ship. Invisible through Tasks 1–7 because this endpoint glue was
+deliberately left to Task 8's IT (`MfaController` class doc) and the page's
+bounce itself had been 404/500 all along, so no POST had ever reached the
+controller.
+
+> **Landed (Task 8, this commit):** both endpoints are annotated
+> `@WebMethod(name = "postVerify" | "postResendEmail")` — the only
+> attribute this Stapler's `WebMethod` has (verified against the resolved
+> artifact: `public abstract String[] name()`) — declaring the exact
+> tokens the page's JS and the plan's contract already use, so no
+> client-side change was needed; `@RequirePOST` stays for the method-level
+> guard. The class comment names the failure signature so nobody strips
+> the annotation as "unused".
+
+### A21 — Bearer `Authorization: *** authenticator (home-grown, no dependency)
+**Status: OPEN — implementation tasked (ruling: mads, 2026-08-19).**
+**Owner: unassigned pending mads's go-ahead.**
+
+The A15 resolution, as a buildable unit. A new `jakarta.servlet.Filter`
+(registered earliest in `DevcruMfaPlugin`'s existing initializer, ahead of
+the gate) that: (1) reads `Authorization: *** on requests that carry it;
+(2) strips the `Bearer ` prefix (case-insensitive scheme match); (3)
+**resolves the caller's identity from a companion header, not the token** —
+a Jenkins API token is an opaque 40-hex random value with no embedded
+identity (verified against `ApiTokenProperty`; unlike GitHub-style tokens
+you cannot parse a user out of it), so the client also sends
+`X-Jenkins-User: <id>` (an explicit, documented client contract of our
+making — the only way to know *which* user's token to check without an
+O(N) scan of every user, which we refuse to do per request); (4) checks
+`User.getById(x, false).getProperty(ApiTokenProperty.class).
+matchesPassword(bearerValue)` — the same primitive
+`BasicHeaderApiTokenAuthenticator` relies on under `Basic`; (5) on
+success, sets the request authentication and the **api-token request
+attribute the gate already exempts** (the same attribute the Basic IT
+pins) — so the gate path is unchanged and the exemption contract is
+identical for Basic and Bearer; (6) on *any* mismatch — header missing,
+unknown user, wrong token, empty token — pass through untouched
+(anonymous / gate apply exactly as today; no silent 401 that would break
+the web UI or a client that simply doesn't use Bearer yet).
+
+**Non-goals (per the ruling):** no new dependency (rejected — see A15);
+no change to the gate's decision chain; no change to the Basic path.
+
+**Acceptance:** (a) unit test — the filter's pure "parse a Bearer header,
+verify against an in-memory `ApiTokenProperty`" seam (TDD per
+`AGENTS.md`, BDD-documented, `TotpTest` shape); (b) IT — add a **Bearer**
+case to `MfaFilterIT` mirroring `apiTokenExemptFromGate` but with
+`Authorization: *** and assert 200 with **no** gate bounce, proving the
+exemption works identically for Bearer on a booted Jenkins. Existing
+Basic and anonymous cases must remain green (no regression in the gate).
 
 ## CLOSED-ON-WATCH — no action, context for the next reader
 
@@ -208,11 +408,6 @@ the full deviation record.
 
 ## Not in the code yet (planned work, not debt)
 
-Task 8's integration test (the `InjectedTest` boot already exercises the
-filter's registration and happy paths live; Task 8 adds the dedicated IT:
-session regeneration on success, a live-mail round trip, A5's full
-pre-login-URL round-trip assertion against a booted Jenkins, and the
-re-pin of the API-token request attribute against a real security chain).
 Task 9's enrolment/management UI (+ A2's *second* minting path and A7/A8's
 telemetry consumer + reset wiring). Task 10's live-box cutover (the plan's
 backup/rollback section).
@@ -225,7 +420,7 @@ backup/rollback section).
 |------|-------------|--------|------|
 | A1 — gate ran on a config defaults instance | `DevcruMfaConfig.currentSafe()` becomes the single authoritative runtime reader; `MfaFilter` and all three `MfaController` read sites use it; `MfaController.currentUser()` delegates to the filter's `findCurrentUser()`; class javadoc reconciled (see "Landed" note in A1). | this commit (Task 7) | The A1 ruling, code-complete: one config object, one user definition, shared by gate and page. |
 | A3 — two redirect contracts (parameter vs. Referer) | `MfaFilter` 302s with `?redirect=<validated>`; `postVerify` reads the parameter first, `Referer` fallback only when absent; both carry the same host-checked validator; MFA page JS carries the parameter across both POSTs (see "Landed" note in A3). | this commit (Task 7) | The A3 ruling, code-complete; the live end-to-end round-trip assertion is Task 8's A5 IT. |
-| A5 — send-back resolved to the MFA page itself | The gate now carries the pre-login destination in `?redirect=` (forged parameters refused by the same validator as forged Referers); the page JS and `postVerify` consume it (see "Landed" note in A5). | this commit (Task 7) | Plumbing landed; the booted-Jenkins round-trip IT assertion is what Task 8 still owes. |
+| A5 — send-back resolved to the MFA page itself | Plumbing (this commit, Task 7): the gate carries the pre-login destination in `?redirect=` (forged parameters refused by the same validator as forged Referers); the page JS and `postVerify` consume it. Full resolution (Task 8, 2026-08-19): `MfaFilterIT.totpFlowEndToEndWithRedirectRoundTrip` — no-carrier → context root; in-site parameter round-trips verbatim through Location → page → JSON; session id rotates on success. | Task 7 commit + this commit (Task 8) | Code-complete end to end; see A5's "Landed (Task 8)" note for the signed-contract scope. |
 | A14 — plugin class still the Task 0 stub | Replaced by the `@Extension` + `@Initializer(EXTENSIONS_AUGMENTED, static)` + `@Terminator` registration with one shared filter instance (see A14 note and the architecture record's Task 7 deviation record). | this commit (Task 7) | Deviation from the plan's `hudson.Plugin`/`STARTED` sketch, documented in `DevcruMfaPlugin`'s javadoc with the exact failure signature. |
 | A6 — README conflated the two trust instruments | One-sentence rewrite of "Remembered devices" in README "Practical usage": session trust (this login, no per-request re-check) vs. browser memory (future logins, the configured window) split into distinct sentences. | this commit (rulings, 2026-08-18) | End-user contract now matches §5 "Trust semantics" of the architecture record. |
 | A11 — `postVerify` comment drift on crumb embedding | Rewrote the endpoint-block comment in `MfaController`: the page gets the crumb from the Java model (`getCrumbField()`/`getCrumbValue()`), not via the `h` taglib (unbound — no `<l:view>`), and the model calls the same core static (`Functions.getCrumb`) so policy stays in core. | this commit (rulings, 2026-08-18) | Comment-only change. |
