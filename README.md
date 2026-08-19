@@ -111,6 +111,27 @@ architecture & design-decision record used to audit the code.
   login from that browser inside the window skips the code. Logging out ends
   the first; the window expiring ends the second. API tokens are exempt —
   CI keeps working.
+- **API tokens over `Bearer` (A21):** a client that authenticates API calls
+  with a Bearer-style `Authorization` header (the convention a wide range of
+  tooling, CI, and the rest of the ecosystem uses — not just core's `Basic`)
+  is also exempt from the second factor, so *that* CI keeps working too.
+  Jenkins tokens are opaque random values with no embedded identity, so
+  Bearer clients must also send a documented companion header naming the
+  caller:
+
+  ```
+  Authorization: Bearer <api-token>
+  X-Jenkins-User: <user-id>
+  ```
+
+  When the token matches that user's API token, the request authenticates as
+  that user and reaches a protected endpoint just like the Basic path (200,
+  no second-factor bounce). A Bearer header with a missing or wrong user id,
+  a blank token, or for an unknown user is **not** treated as an
+  authenticated API call — the request continues as if no Bearer header had
+  been sent (no 401, no 500, no oracle) and the normal guest/login handling
+  applies. Only the `Bearer` scheme is recognised; a `Basic` header is
+  handled by core as before, and an unrecognised scheme is left alone.
 
 ### Corner cases, and how they are handled
 

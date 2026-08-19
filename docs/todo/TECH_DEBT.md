@@ -328,41 +328,66 @@ controller.
 > the annotation as "unused".
 
 ### A21 — Bearer `Authorization: *** authenticator (home-grown, no dependency)
-**Status: OPEN — implementation tasked (ruling: mads, 2026-08-19).**
-**Owner: unassigned pending mads's go-ahead.**
+**Status: LANDED (2026-08-19) — `org.sebcru.mfa.BearerTokenFilter` +
+`BearerTokenFilterTest` (8 parse cases) + `MfaFilterIT#bearerTokenExemptFromGate`
+(booted IT, positive + no-oracle negative); CI full-green 83 tests / 0 failures
+on `clean verify`.**
+**Owner: landed this session; no action remaining.**
 
-The A15 resolution, as a buildable unit. A new `jakarta.servlet.Filter`
-(registered earliest in `DevcruMfaPlugin`'s existing initializer, ahead of
-the gate) that: (1) reads `Authorization: *** on requests that carry it;
-(2) strips the `Bearer ` prefix (case-insensitive scheme match); (3)
-**resolves the caller's identity from a companion header, not the token** —
-a Jenkins API token is an opaque 40-hex random value with no embedded
-identity (verified against `ApiTokenProperty`; unlike GitHub-style tokens
-you cannot parse a user out of it), so the client also sends
-`X-Jenkins-User: <id>` (an explicit, documented client contract of our
-making — the only way to know *which* user's token to check without an
-O(N) scan of every user, which we refuse to do per request); (4) checks
-`User.getById(x, false).getProperty(ApiTokenProperty.class).
-matchesPassword(bearerValue)` — the same primitive
-`BasicHeaderApiTokenAuthenticator` relies on under `Basic`; (5) on
-success, sets the request authentication and the **api-token request
-attribute the gate already exempts** (the same attribute the Basic IT
-pins) — so the gate path is unchanged and the exemption contract is
-identical for Basic and Bearer; (6) on *any* mismatch — header missing,
-unknown user, wrong token, empty token — pass through untouched
-(anonymous / gate apply exactly as today; no silent 401 that would break
-the web UI or a client that simply doesn't use Bearer yet).
+The A15 resolution, as a buildable unit — a new `jakarta.servlet.Filter`
+(registered earliest in `DevcruMfaPlugin`, ahead of the gate): (1) reads
+`Authorization: *** on requests that carry it; (2) strips the `Bearer `
+prefix (case-insensitive scheme match); (3) **resolves the caller's identity
+from a companion header, not the token** — a Jenkins API token is an opaque
+40-hex random value with no embedded identity (verified against
+`ApiTokenProperty`; unlike GitHub-style tokens you cannot parse a user out of
+it), so the client also sends `X-Jenkins-User: <id>` (an explicit, documented
+client contract of our making — the only way to know *which* user's token to
+check without an O(N) scan of every user, which we refuse to do per request);
+(4) checks
+`User.getById(x, false).getProperty(ApiTokenProperty.class).matchesPassword(bearerValue)`;
+(5) on success, sets the request authentication (the
+`SecurityContextHolder`'s `Authentication`, via the public
+`User.impersonate2()` seam — the one step Spring's absent Bearer filter would
+do) and the **api-token request attribute the gate already exempts** — so the
+gate path is unchanged and the exemption contract is identical for Basic and
+Bearer; (6) on *any* mismatch or runtime exception — header missing, unknown
+user, wrong token, empty token, a property that fails to resolve — pass
+through untouched (anonymous / gate apply exactly as today; no silent 401, no
+500, no oracle: a wrong Bearer is byte-for-byte indistinguishable from no
+token).
+
+**Landed design note (AMC constraint):** a first draft that delegated the token
+check to core's internal `jenkins.security.BasicApiTokenHelper` — or the
+`User.impersonate(UserDetails)` overload — failed
+`access-modifier-checker:enforce` ("must not be used"): a Jenkins plugin may
+only call core's approved public API surface. The landed build uses the public
+`ApiTokenProperty.matchesPassword` path (the same primitive Basic's
+authenticator relies on under the hood, reached through the public door) and
+`User.impersonate2()` (the public 0-arg Spring-flavoured impersonation seam —
+no current-user permission assertion) — same effective behaviour, no
+dependency on internal seams that could shift across core versions.
 
 **Non-goals (per the ruling):** no new dependency (rejected — see A15);
-no change to the gate's decision chain; no change to the Basic path.
+no change to the gate's decision chain (it still reads the same api-token
+attribute; it has zero code changes for Bearer); no change to the Basic path.
 
-**Acceptance:** (a) unit test — the filter's pure "parse a Bearer header,
-verify against an in-memory `ApiTokenProperty`" seam (TDD per
-`AGENTS.md`, BDD-documented, `TotpTest` shape); (b) IT — add a **Bearer**
-case to `MfaFilterIT` mirroring `apiTokenExemptFromGate` but with
-`Authorization: *** and assert 200 with **no** gate bounce, proving the
-exemption works identically for Bearer on a booted Jenkins. Existing
-Basic and anonymous cases must remain green (no regression in the gate).
+**Acceptance met:** (a) unit test — `BearerTokenFilter.parseBearing` is pure
+string logic and unit-tested in a plain JVM (`BearerTokenFilterTest`, 7 cases:
+well-formed, scheme case-insensitivity, Basic-adjacent, blank token, absent
+companion header, blank companion header, absent `Authorization` header, raw
+user-id pass-through). The token-check half is not a plain-JVM test —
+`ApiTokenProperty.matchesPassword` only dereferences a real `tokenStore` once
+it has been populated by a token minted for a saved user, so that half is
+live-tested as (b); (b) IT — `MfaFilterIT#bearerTokenExemptFromGate` mirrors
+`apiTokenExemptFromGate` but with `Authorization: *** (case: `bearer`) +
+`X-Jenkins-User`, real `rule.createApiToken` token, booted Jenkins: 200 with
+**no** `/mfa` bounce. The same IT carries the no-oracle negative — a Bearer
+token presented for the wrong caller id must return the same status +
+Location as a bare no-token baseline (200 in this harness, because anonymous
+has read access to the job API; the assertion compares the two rather than
+asserting a hardcoded status, so it keeps pinning itself if the anonymous
+access model ever changes). Existing Basic and anonymous cases remain green.
 
 ## CLOSED-ON-WATCH — no action, context for the next reader
 
