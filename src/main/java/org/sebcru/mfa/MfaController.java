@@ -15,6 +15,7 @@ import net.sf.json.JSONObject;
 import org.kohsuke.stapler.Stapler;
 import org.kohsuke.stapler.StaplerRequest2;
 import org.kohsuke.stapler.StaplerResponse2;
+import org.kohsuke.stapler.WebMethod;
 import org.kohsuke.stapler.interceptor.RequirePOST;
 import org.sebcru.mfa.crypto.Totp;
 import org.sebcru.mfa.email.EmailCodeIssuer;
@@ -29,7 +30,7 @@ import org.sebcru.mfa.gate.TrustStore;
  *
  * <p>This is the plan's {@code MfaController} (Task 6). It mounts at the
  * stable Jenkins path
- * {@code <root>/securityRealm/mfa}: the gate filter (Task 7) 302s a
+ * {@code <root>/mfa}: the gate filter (Task 7) 302s a
  * password-authenticated, still-MFA-unverified user here, the user types a
  * 6-digit TOTP or an 8-character email code, and on success the session is
  * marked MFA-verified and the user is redirected <em>back to where they
@@ -52,7 +53,7 @@ import org.sebcru.mfa.gate.TrustStore;
  * header precedence is pinned by {@code MfaControllerTest.resolveTargetPrefersCanonicalParameter});
  * the end-to-end pre-login round trip is pinned by Task 8's IT (A5).
  *
- * <h2>Two deliberate deviations from the plan sketch (flagged for review)</h2>
+ * <h2>Three deliberate deviations from the plan sketch (flagged for review)</h2>
  * <ol>
  *   <li><b>{@code hudson.model.RootAction}, not
  *       {@code jenkins.model.GlobalAction}.</b> The plan's sketch
@@ -65,7 +66,8 @@ import org.sebcru.mfa.gate.TrustStore;
  *       {@code RootAction} (a {@code @Extension}; {@code IdentityRootAction}
  *       in core implements it). {@link #getUrlName()} stays
  *       {@code "securityRealm/mfa"} exactly as the plan wants, so the URL is
- *       unchanged. {@code RootAction} is <em>not</em>
+ *       (unchanged until Task 8's Defect B moved it — see deviation 3).
+ *       {@code RootAction} is <em>not</em>
  *       {@code UnprotectedRootAction}, so it remains behind authentication
  *       (the requirement).
  *   <li><b>{@code postResendEmail} takes <em>no</em> {@code dest}
@@ -79,6 +81,25 @@ import org.sebcru.mfa.gate.TrustStore;
  *       and this class disagree; this class follows the signed security
  *       decision (codes to the registered address, never an attacker point
  *       target) over the sketch.
+ *   <li><b>The mount moved from {@code securityRealm/mfa} to
+ *       {@code mfa} (Task 8, Defect B — mads-ruled 2026-08-19).</b> Tasks 1–7
+ *       ran with the plan's path because every harness up to that point used
+ *       the default test realm, which owns no node at {@code securityRealm}.
+ *       The Task 8 end-to-end IT booted the production shape — a
+ *       ModelObject-backed local realm (HPSR) with real password users — and
+ *       the page 404'd: Stapler mounts the *active realm* at the top-level
+ *       {@code securityRealm} node and it claims the whole prefix (decoded
+ *       404 body: {@code No matching rule was found on
+ *       hudson.security.HudsonPrivateSecurityRealm for \"/mfa\"}). On the
+ *       live box — a local realm — every enrolled user's gate bounce would
+ *       404, so this was production-blocking, not a harness artifact.
+ *       {@code mfa} is a free single segment (no core mount, nothing a
+ *       realm can squat), survives any realm shape, and the allow-list /
+ *       {@code isSecurityPath} / unit pins / IT moved with it in the same
+ *       commit. The plan's path sketch is superseded here; the rule this
+ *       defect teaches — enumerate what core mounts at a planned top-level
+ *       segment for every realm shape that can be live — is recorded in the
+ *       Task 8 handoff.
  * </ol>
  *
  * <h2>Endpoint returns (plan sketch was debris)</h2>
@@ -137,8 +158,9 @@ public class MfaController implements RootAction {
   private EmailSender emailSender = new JenkinsEmailSender();
 
   // ---------------------------------------------------------------------
-  // RootAction — mounts the page at <root>/securityRealm/mfa, no action-bar
-  // icon (getIconFileName() null), still behind authentication.
+  // RootAction — mounts the page at <root>/mfa (moved from
+  // <root>/securityRealm/mfa by Task 8's Defect B, see class doc), no
+  // action-bar icon (getIconFileName() null), still behind authentication.
   // ---------------------------------------------------------------------
 
   @Override
@@ -153,8 +175,9 @@ public class MfaController implements RootAction {
 
   @Override
   public String getUrlName() {
-    // Stable, current-core path (see class doc, deviation 1).
-    return "securityRealm/mfa";
+    // Stable, current-core path (see class doc, deviation 3): a free single
+    // segment nothing in core or in any realm shape occupies.
+    return "mfa";
   }
 
   // ---------------------------------------------------------------------
@@ -266,6 +289,15 @@ public class MfaController implements RootAction {
   // <l:view> wrapper, where the `h` variable is unbound — but the model
   // calls the same core static (Functions.getCrumb), so crumb policy stays
   // in core.
+  //
+  // URL ROUTING (Task 8 Defect D, 2026-08-19): @RequirePOST is a *policy*
+  // guard (it rejects non-POST) — it does NOT declare a dispatch token.
+  // Stapler's dynamic-method dispatch only auto-maps get/is/do-prefixed
+  // methods (plus @WebMethod), so a method named bare "postVerify" exposes
+  // no URL token at all and <ctx>/mfa/postVerify 404'd — the booted-Jenkins
+  // 404 body named it explicitly. @WebMethod(name="…") declares the exact
+  // token the page's JS (postForm("postVerify")) and the plan already rely
+  // on, keeping the contract while making it routable.
   // ---------------------------------------------------------------------
 
   /**
@@ -279,6 +311,7 @@ public class MfaController implements RootAction {
    * <p>Glue for Task 8. The pure decisions it delegates to are unit-tested.
    */
   @RequirePOST
+  @WebMethod(name = "postVerify")
   public void postVerify(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
     User u = currentUser();
     if (u == null) {
@@ -357,7 +390,7 @@ public class MfaController implements RootAction {
       regenerateVerified(req);
       long hours = trustStore.effectiveTrustHours(cfg);
       // A3 (mads ruling, 2026-08-18): the ?redirect= query parameter the gate
-      // 302'd to (/securityRealm/mfa?redirect=…) is CANONICAL over Referer —
+      // 302'd to (/mfa?redirect=…) is CANONICAL over Referer —
       // and for good reason: a browser POST of this form carries the MFA page's
       // OWN url as its Referer, so a Referer-only contract lands a verified
       // user back on the MFA page (immediate re-prompt loop). The parameter is
@@ -388,6 +421,7 @@ public class MfaController implements RootAction {
    * (see class doc, deviation 2 — no {@code dest}).
    */
   @RequirePOST
+  @WebMethod(name = "postResendEmail")
   public void postResendEmail(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
     User u = currentUser();
     if (u == null) {
@@ -750,6 +784,7 @@ public class MfaController implements RootAction {
       case "logoutpost":
       case "signup":
       case "j_acegi":
+      case "mfa":
       case "securityrealm":
       case "security":
         return true;

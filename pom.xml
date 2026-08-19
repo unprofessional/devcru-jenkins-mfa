@@ -97,6 +97,22 @@
           </rules>
         </configuration>
       </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- The parent POM's default surefire includes do NOT match the
+               Jenkins-in-JVM integration test (Task 8, MfaFilterIT) — there
+               is no failsafe plugin in this build, so surefire runs
+               everything. Add the IT explicitly so it runs on every
+               `mvn verify` (it is the A5 end-to-end round-trip pin, not an
+               optional smoke test). -->
+          <includes>
+            <include>**/*Test.java</include>
+            <include>**/*IT.java</include>
+          </includes>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 </project>

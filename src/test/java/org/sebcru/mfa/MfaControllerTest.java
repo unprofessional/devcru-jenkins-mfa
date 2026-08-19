@@ -147,7 +147,7 @@ class MfaControllerTest {
    * <p>BDD:
    * <pre>
    * GIVEN the same site
-   * WHEN  the referer points at /login, /logout, /signup, /securityRealm/mfa
+   * WHEN  the referer points at /login, /logout, /signup, /mfa
    * THEN  each resolves to "/" — not to the security flow
    * WHEN  the referer is an ordinary page that merely CONTAINS a security word
    *       mid-path (/jobs/security-review/)
@@ -168,7 +168,7 @@ class MfaControllerTest {
   @Test
   void refusesSecurityPathsButHonoursLookalikes() {
     for (String p : new String[] {
-        "/login", "/logout", "/signup", "/securityRealm/mfa", "/security/realms"}) {
+        "/login", "/logout", "/signup", "/mfa", "/security/realms"}) {
       assertEquals("/", MfaController.resolveRedirectTarget(p,
           "jenkins.dev", "8080", ""),
           "security path must fall back to root: " + p);
@@ -188,7 +188,7 @@ class MfaControllerTest {
    * GIVEN a site under context path /jenkins (root-installed sites use "")
    * WHEN  the referer is /jenkins/job/web/
    * THEN  the result is /jenkins/job/web/ — mount preserved, path honoured
-   * WHEN  the referer is /jenkins/securityRealm/mfa
+   * WHEN  the referer is /jenkins/mfa
    * THEN  the result is /jenkins — the ROOT with mount, not a bare "/"
    * </pre>
    *
@@ -206,7 +206,7 @@ class MfaControllerTest {
         MfaController.resolveRedirectTarget("/jenkins/job/web/",
             "jenkins.dev", "8080", "/jenkins"));
     assertEquals("/jenkins",
-        MfaController.resolveRedirectTarget("/jenkins/securityRealm/mfa",
+        MfaController.resolveRedirectTarget("/jenkins/mfa",
             "jenkins.dev", "8080", "/jenkins"));
     assertEquals("/jenkins",
         MfaController.resolveRedirectTarget(null,
@@ -429,14 +429,14 @@ class MfaControllerTest {
    * GIVEN a site at host "jenkins.dev", root context
    * AND   the gate's bounce URL carried  ?redirect=/job/web/
    * AND   the browser's form POST carries Referer = the MFA page's own URL
-   *       (https://jenkins.dev/securityRealm/mfa) — the form-POST shape,
+   *       (https://jenkins.dev/mfa) — the form-POST shape,
    *       where Referer alone would re-prompt the user
    * WHEN  the post-verify composition resolves the send-back target
    *       (parameter first, Referer fallback, one validator)
    * THEN  the target is /job/web/ — the PRE-LOGIN destination the user
    *       actually wanted, not the MFA page
    * GIVEN the same site, the gate's bounce carried NO parameter (a user who
-   *       bookmarked /securityRealm/mfa directly)
+   *       bookmarked /mfa directly)
    * AND   the page was opened via Referer = https://jenkins.dev/job/web/
    * WHEN  the same composition runs
    * THEN  the target is /job/web/ — the Referer fallback still works
@@ -460,7 +460,7 @@ class MfaControllerTest {
     // Referer = the MFA page's own URL. The parameter must win.
     String formPostShape = MfaFilter.resolveTarget(
         "/job/web/",                                  // ?redirect= (canonical)
-        "https://jenkins.dev/securityRealm/mfa",      // Referer (the MFA page)
+        "https://jenkins.dev/mfa",                    // Referer (the MFA page)
         "jenkins.dev", "8080", "");
     assertEquals("/job/web/", formPostShape,
         "the gate's ?redirect= parameter is canonical over the MFA-page Referer");
