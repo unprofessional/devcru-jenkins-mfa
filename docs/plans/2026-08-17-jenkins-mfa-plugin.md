@@ -597,7 +597,12 @@ Decision chain (exact order):
 **Test cases (3):**
 1. **totp_flow:** create user, set `MfaUserProperty` TOTP secret; Jenkins rule; `POST /j_acegi_securityCheck` with credentials → 302 to `/securityRealm/mfa`; POST `postVerify` with correct `Totp.codeAt(key, now)` → redirect to `/` (assert **not** to a dead path); subsequent `GET /` with same session cookie → 200 (trusted); fresh session → 302 (untrusted).
 2. **email_flow:** enable email factor with `CaptureEmailSender`; `postResendEmail` captures code; `postVerify` with captured code → trusted.
-3. **api_token_exempt:** `Authorization: Bearer <user-api-token>` against a protected endpoint (`/api/json`) → 200 **without** MFA.
+3. **api_token_exempt:** `Authorization: Basic <user>:*** against a protected endpoint (`/api/json`) → 200 **without** MFA.
+   *(Note, 2026-08-19: the original text here sketched `Bearer <api-token>` — that case is the
+   A21 sibling `MfaFilterIT#bearerTokenExemptFromGate`,
+   LANDED 2026-08-19 (`BearerTokenFilter`, see TECH_DEBT A21), NOT a Task 8/9 deliverable.
+   It asserts 200 / no `/mfa` the same way, with the documented
+   `X-Jenkins-User` companion header, plus the no-oracle mismatch half.)*
 4. **lockout:** 5 wrong TOTP → 6th returns locked JSON with `retrySeconds > 0`.
 5. **kill-switch:** (unit level, in `RateLimiterTest`'s sibling or a small `FilterLogicTest`) `off()` returns true when a stub config reports policy OFF; the filter's pass-through short-circuit is covered by case 3's shape — document the env-var seam as tested-by-construction (no JVM env in unit tests).
 

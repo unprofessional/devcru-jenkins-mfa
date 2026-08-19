@@ -13,11 +13,14 @@ bedside reading.
 
 `devcru-mfa` (repo `/home/hunter/dev/devcru-jenkins-mfa`, branch
 **`develop`**, remote `github.com:unprofessional/devcru-jenkins-mfa.git`)
-is at **`3a511ce`**, pushed, CI-mirror green: Tasks 0–8 complete. The
+is at **`19e8498`** (A21 landed 2026-08-19, this session — see note
+below the paragraph), pushed, CI-mirror green: Tasks 0–8 complete **plus
+A21**, the home-grown Bearer API-token authenticator
+(`BearerTokenFilter`, mads-ordered dependency of Task 9). The
 live MFA gate (`MfaFilter`), the login page + verify/resend endpoints
 (`MfaController`, mounted at **`/mfa`** per mads's 2026-08-19 ruling),
 the TOTP core, email-code machinery, trust/rate-limit stores, and the
-7-case end-to-end integration test (`MfaFilterIT`, Jenkins booted in-JVM)
+8-case end-to-end integration test (`MfaFilterIT`, Jenkins booted in-JVM)
 all work. **Task 9 — the user-facing factor management page on *Manage
 account → Security* — is the next and only remaining development task
 ** before Task 10 (deploy to `jenkins.devcru.org`). The plan's Task 9
@@ -26,6 +29,21 @@ today with two corrections verified against the actual jenkins-core
 2.528.3 sources; a fresh reader who trusts the *old* plan text will hit
 a silent-failure view path (details in §5.1) — the plan is now
 correct.
+
+**A21 landed 2026-08-19 (commit `19e8498`, this session):** Bearer
+`Authorization` + `X-Jenkins-User` now authenticates as the API-token
+owner and is exempt from the gate exactly like the Basic path —
+**zero change to the gate itself** (it reads the same api-token request
+attribute; A21 merely sets it, and the security context, for Bearer).
+`BearerTokenFilter` is registered *ahead* of `MfaFilter` in
+`DevcruMfaPlugin`. Task 9 therefore needs **no filter work**: enroll /
+disable / revoke endpoints and the security-tab section run on the same
+gate as today, and a Bearer client hitting any of them is exempt just
+like any other API-token request. Full forensics (incl. the
+access-modifier-checker constraint that shaped the public-API design)
+are in `docs/todo/TECH_DEBT.md` A21 (status: LANDED), and the new booted
+IT is `MfaFilterIT#bearerTokenExemptFromGate` (positive + no-oracle
+mismatch negative).
 
 ## 2. Operating environment (exact commands)
 
@@ -82,7 +100,9 @@ Tests, `src/test/java/org/sebcru/mfa/`: `TotpTest`, `DevcruMfaConfigTest`,
 `FilterLogicTest` (pure gate decision table), `MfaControllerTest` (pure
 seams), `MfaUserPropertyTest`, `gate/TrustStoreTest`, `gate/RateLimiterTest`,
 `email/EmailCodeIssuerTest` (+ `CaptureEmailSender` in-JVM mail sink),
-and **`MfaFilterIT`** — the booted end-to-end suite, 7/7 green.
+and **`MfaFilterIT`** — the booted end-to-end suite, 8/8 green
+(7 Task-8 cases + the A21 Bearer case, `bearerTokenExemptFromGate`,
+landed 2026-08-19), plus `BearerTokenFilterTest` (8 pure-parse cases).
 
 ## 4. How the IT works (you will extend it, or add a sibling file)
 
