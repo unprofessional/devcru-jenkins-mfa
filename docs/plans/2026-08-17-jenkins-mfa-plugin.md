@@ -1,5 +1,20 @@
 # Devcru MFA Plugin — Implementation Plan
 
+> **AMENDMENTS (post-landing rulings — these supersede the original text
+> wherever they conflict, which remains un-rewritten for provenance):**
+> 1. **MFA page mount is `/mfa`, not `/securityRealm/mfa`** (mads, 2026-08-19;
+>    executed in Task 8, commit `c34e2b1`; TECH_DEBT A17). Every reference
+>    below to `/securityRealm/mfa`, `getUrlName() == "securityRealm/mfa"`,
+>    or the allow-list's `/securityRealm` prefix is void. All other plan text
+>    stands.
+> 2. **A15 resolution (mads, 2026-08-19):** the Bearer case is a real gap,
+>    not a core-bet — implement a home-grown Bearer→API-token filter (read
+>    `Authorization: *** match against `ApiTokenProperty`, set the
+>    api-token request attribute the gate already exempts) rather than
+>    voiding the plan line or waiting on core. Tracked as its own small
+>    task; no new dependency (Spring Security is `provided`/transitive and
+>    Jenkins does not run its web filter chain).
+
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
 
 **Goal:** Build `devcru-mfa`, a self-hosted Jenkins MFA plugin: TOTP (Authy/GA-compatible) and email one-time codes, with remembered-device trust ≥ 24h (default 30 days), no subscription, no dead third-party redirects.
@@ -595,9 +610,18 @@ Auth in tests: use the crumb — `CrumbIssuer.get(req).issueFor(Jenkins.ANONYMOU
 - Create: `src/main/resources/org/sebcru/mfa/views/MfaUserProperty.jelly` — form bound to `MfaUserProperty` (`f:form` with `<f:entry>`s): TOTP secret (read-only + "Generate" hidden action + QR `<img>` via `data:` URI built server-side with zxing `MultiFormatWriter().encode(otpauthUri, BarcodeFormat.QR_CODE, 300,300)`); confirm-code field to finalize enrollment (`postConfirmEnroll` controller action: verify before committing the secret); registered email field + "Send test code" (cooldown); "Disable factor" buttons; "Revoke remembered devices" (clears trust).
 - Extend `MfaController` with `postEnrollTotp`, `postDisableTotp`, `postDisableEmail`, `postRevokeTrust` (each JSON, crumb-checked by core).
 
+  **Correction from Task 8 (A20, 2026-08-19) — every endpoint above needs
+  `@WebMethod(name = "…")`:** Stapler's dynamic-method dispatch auto-maps only
+  get/is/do-prefixed methods; a method named bare `postEnrollTotp` exposes *no
+  dispatch token* and `<ctx>/securityRealm/…` (or any mount) + suffix 404s at
+  dispatch time. `@RequirePOST` is policy, not routing. Task 8's IT caught this
+  on `postVerify`/`postResendEmail` (dead-button risk for every user); do not
+  repeat it. Add `@WebMethod` in the same commit as each endpoint, not as a
+  follow-up.
+
 **Enrollment safety:** the `otpauth://` URI + displayed secret are only shown **pre-commit**; the secret is written to the property only after a correct confirm code (prevents accidental orphaning of a key the user never registered).
 
-**Verification:** `mvn test` (full) green; `mvn -DskipTests package` → `target/devcru-mfa.hpi`.
+**Verification:** `mvn clean verify` (full, CI-mirror — *not* bare `mvn test`; SpotBugs + `.hpi` packaging included per AGENTS.md) green.
 **Commit:** `feat(ui): factor management on user security page`
 
 ---
@@ -613,7 +637,7 @@ Auth in tests: use the crumb — `CrumbIssuer.get(req).issueFor(Jenkins.ANONYMOU
 5. **Re-enroll mads on the new plugin** (Task 9 UI: TOTP QR via Authy, register email).
 6. **Uninstall the old plugin (mads):** Manage Plugins → Installed → remove the old 2FA plugin, restart. Only after step 5 — one factor set active at a time.
 7. **Acceptance (manual, mads + me via logs):**
-   - [ ] mads logs in → lands on **new** `/securityRealm/mfa` page (not the old dead redirect).
+   - [ ] mads logs in → lands on **new** `/mfa` page (not the old dead redirect; the old `/securityRealm/mfa` path was removed in Task 8 — any stale bookmarks 404 by design).
    - [ ] TOTP: scans QR in **Authy** → verifies → lands on `/`.
    - [ ] Email: "Use email code" → code arrives via Jenkins mail config → verifies.
    - [ ] Re-login within 30 days → **no** second prompt (trust honored).

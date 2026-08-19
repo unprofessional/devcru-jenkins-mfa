@@ -176,24 +176,35 @@ plumbing.
 > fallback).
 
 ### A15 — API-token exemption: plan's `Bearer` case has no core authenticator on 2.528.3
-**Status: OPEN — ruling needed (mads).** **Owner: none until ruled (no filter
-change in either outcome).**
+**Status: RESOLVED BY RULING (mads, 2026-08-19) — implementation owed as a
+standalone task (A21).** **Owner: the Bearer task (no filter change on the
+gate side; the gate already exempts the request attribute).**
 
-The plan's Task 8 IT case 3 specifies re-pinning the API-token exemption
-against a real security chain with `Authorization: Bearer <token>`. jenkins-core
+The plan's Task 8 IT case 3 specified re-pinning the API-token exemption
+against a real security chain with `Authorization: *** jenkins-core
 2.528.3 has **no Bearer token authenticator** (verified against the resolved
-artifact — only the `BasicHeader*` token classes exist). The IT therefore
+artifact — only the `BasicHeader*` token classes exist; a full-string search
+of the jar finds no Bearer at all). The IT therefore
 pins the **Basic** `user:token` header end to end
 (`MfaFilterIT.apiTokenExemptFromGate` — 200, no gate bounce), and the
 exemption itself is the in-chain request attribute
 `jenkins.security.BasicHeaderApiTokenAuthenticator` — which works for
 whatever authenticator sets it.
 
-**Question for mads:** (a) treat the request attribute as the contract on
-2.528.3 and void the plan's Bearer line (core may gain Bearer in a future
-LTS — the seam would follow with no filter change), or (b) call it a real
-gap to track against a future core. Either way the filter code is final;
-only the plan line's status changes.
+**Ruling (mads, 2026-08-19):** implement Bearer — but *not* as a bet on
+core gaining it (A15 option (a) was rejected in spirit) and *not* by
+pulling a third-party dependency. Spring Security 6.5.3 is in the
+dependency tree only as a `provided` *transitive* of jenkins-core, and
+Jenkins does not run Spring Security's web filter chain (the Spring jars
+serve the type system only: `Authentication`, `GrantedAuthority`) — so
+"built-in" is the wrong frame. The implementation, tracked as A21, is a
+small `jakarta.servlet.Filter` registered earliest (ahead of the gate):
+read `Authorization: *** strip the `Bearer ` prefix, resolve the user's
+`ApiTokenProperty.matchesPassword(…)` (the same core primitive
+`BasicHeaderApiTokenAuthenticator` uses under `Basic`), and on success
+set the request auth + the same api-token request attribute the gate
+already exempts — so no gate change is required on either outcome, as
+A15's original note promised.
 
 ### A16 — `MfaFilter.targetPath()` evaluated every request as `/` (302 self-loop)
 **Status: RESOLVED (Task 8).** **Owner: Task 8 (IT exposed, filter fixed, same
@@ -315,6 +326,43 @@ controller.
 > client-side change was needed; `@RequirePOST` stays for the method-level
 > guard. The class comment names the failure signature so nobody strips
 > the annotation as "unused".
+
+### A21 — Bearer `Authorization: *** authenticator (home-grown, no dependency)
+**Status: OPEN — implementation tasked (ruling: mads, 2026-08-19).**
+**Owner: unassigned pending mads's go-ahead.**
+
+The A15 resolution, as a buildable unit. A new `jakarta.servlet.Filter`
+(registered earliest in `DevcruMfaPlugin`'s existing initializer, ahead of
+the gate) that: (1) reads `Authorization: *** on requests that carry it;
+(2) strips the `Bearer ` prefix (case-insensitive scheme match); (3)
+**resolves the caller's identity from a companion header, not the token** —
+a Jenkins API token is an opaque 40-hex random value with no embedded
+identity (verified against `ApiTokenProperty`; unlike GitHub-style tokens
+you cannot parse a user out of it), so the client also sends
+`X-Jenkins-User: <id>` (an explicit, documented client contract of our
+making — the only way to know *which* user's token to check without an
+O(N) scan of every user, which we refuse to do per request); (4) checks
+`User.getById(x, false).getProperty(ApiTokenProperty.class).
+matchesPassword(bearerValue)` — the same primitive
+`BasicHeaderApiTokenAuthenticator` relies on under `Basic`; (5) on
+success, sets the request authentication and the **api-token request
+attribute the gate already exempts** (the same attribute the Basic IT
+pins) — so the gate path is unchanged and the exemption contract is
+identical for Basic and Bearer; (6) on *any* mismatch — header missing,
+unknown user, wrong token, empty token — pass through untouched
+(anonymous / gate apply exactly as today; no silent 401 that would break
+the web UI or a client that simply doesn't use Bearer yet).
+
+**Non-goals (per the ruling):** no new dependency (rejected — see A15);
+no change to the gate's decision chain; no change to the Basic path.
+
+**Acceptance:** (a) unit test — the filter's pure "parse a Bearer header,
+verify against an in-memory `ApiTokenProperty`" seam (TDD per
+`AGENTS.md`, BDD-documented, `TotpTest` shape); (b) IT — add a **Bearer**
+case to `MfaFilterIT` mirroring `apiTokenExemptFromGate` but with
+`Authorization: *** and assert 200 with **no** gate bounce, proving the
+exemption works identically for Bearer on a booted Jenkins. Existing
+Basic and anonymous cases must remain green (no regression in the gate).
 
 ## CLOSED-ON-WATCH — no action, context for the next reader
 
