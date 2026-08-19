@@ -376,7 +376,7 @@ class MfaFilterIT {
 
   /**
    * WHAT: a Bearer API-token request — sent with {@code Authorization:
-   * Bearer *** + the A21 companion {@code X-Jenkins-User} header, the exact
+   * Bearer <token> + the A21 companion {@code X-Jenkins-User} header, the exact
    * documented client contract of the home-grown {@link BearerTokenFilter} —
    * is <strong>exempt from the gate</strong> exactly like the equivalent Basic
    * request ({@code apiTokenExemptFromGate}): 200, no 302 to the MFA page, on
@@ -388,7 +388,7 @@ class MfaFilterIT {
    *       rule.createApiToken (the same primitive the Basic IT uses), and
    *       policy REQUIRED, and a fresh unauthed web client (anonymous)
    * WHEN  the protected /api/json is fetched with
-   *       Authorization: Bearer ***  AND X-Jenkins-User: &lt;user&gt;
+   *       Authorization: Bearer <token>  AND X-Jenkins-User: &lt;user&gt;
    * THEN  the BearerTokenFilter (which core's absent Bearer authenticator
    *       would never set) recognises the token, sets the api-token request
    *       attribute + the security context, the gate sees the attribute and
@@ -410,7 +410,7 @@ class MfaFilterIT {
    * <pre>
    * GIVEN the same real token, policy REQUIRED, and a fresh anonymous client
    * WHEN  a baseline /api/json with NO headers at all is fetched
-   * AND   the same /api/json is fetched with Authorization: Bearer ***
+   * AND   the same /api/json is fetched with Authorization: Bearer <token>
    *       token but X-Jenkins-User naming a WRONG caller id
    * THEN  the wrong-caller response's status AND Location are byte-for-byte
    *       identical to the no-token baseline — the filter touched nothing

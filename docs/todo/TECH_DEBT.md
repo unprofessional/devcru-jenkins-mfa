@@ -181,7 +181,7 @@ standalone task (A21).** **Owner: the Bearer task (no filter change on the
 gate side; the gate already exempts the request attribute).**
 
 The plan's Task 8 IT case 3 specified re-pinning the API-token exemption
-against a real security chain with `Authorization: *** jenkins-core
+against a real security chain with `Authorization: <api-token> jenkins-core
 2.528.3 has **no Bearer token authenticator** (verified against the resolved
 artifact — only the `BasicHeader*` token classes exist; a full-string search
 of the jar finds no Bearer at all). The IT therefore
@@ -199,7 +199,7 @@ Jenkins does not run Spring Security's web filter chain (the Spring jars
 serve the type system only: `Authentication`, `GrantedAuthority`) — so
 "built-in" is the wrong frame. The implementation, tracked as A21, is a
 small `jakarta.servlet.Filter` registered earliest (ahead of the gate):
-read `Authorization: *** strip the `Bearer ` prefix, resolve the user's
+read `Authorization: <api-token> strip the `Bearer ` prefix, resolve the user's
 `ApiTokenProperty.matchesPassword(…)` (the same core primitive
 `BasicHeaderApiTokenAuthenticator` uses under `Basic`), and on success
 set the request auth + the same api-token request attribute the gate
@@ -327,7 +327,7 @@ controller.
 > guard. The class comment names the failure signature so nobody strips
 > the annotation as "unused".
 
-### A21 — Bearer `Authorization: *** authenticator (home-grown, no dependency)
+### A21 — Bearer `Authorization: <api-token> authenticator (home-grown, no dependency)
 **Status: LANDED (2026-08-19) — `org.sebcru.mfa.BearerTokenFilter` +
 `BearerTokenFilterTest` (8 parse cases) + `MfaFilterIT#bearerTokenExemptFromGate`
 (booted IT, positive + no-oracle negative); CI full-green 83 tests / 0 failures
@@ -336,7 +336,7 @@ on `clean verify`.**
 
 The A15 resolution, as a buildable unit — a new `jakarta.servlet.Filter`
 (registered earliest in `DevcruMfaPlugin`, ahead of the gate): (1) reads
-`Authorization: *** on requests that carry it; (2) strips the `Bearer `
+`Authorization: <api-token> on requests that carry it; (2) strips the `Bearer `
 prefix (case-insensitive scheme match); (3) **resolves the caller's identity
 from a companion header, not the token** — a Jenkins API token is an opaque
 40-hex random value with no embedded identity (verified against
@@ -380,7 +380,7 @@ user-id pass-through). The token-check half is not a plain-JVM test —
 `ApiTokenProperty.matchesPassword` only dereferences a real `tokenStore` once
 it has been populated by a token minted for a saved user, so that half is
 live-tested as (b); (b) IT — `MfaFilterIT#bearerTokenExemptFromGate` mirrors
-`apiTokenExemptFromGate` but with `Authorization: *** (case: `bearer`) +
+`apiTokenExemptFromGate` but with `Authorization: <api-token> (case: `bearer`) +
 `X-Jenkins-User`, real `rule.createApiToken` token, booted Jenkins: 200 with
 **no** `/mfa` bounce. The same IT carries the no-oracle negative — a Bearer
 token presented for the wrong caller id must return the same status +
