@@ -132,7 +132,7 @@ class MfaFilterIT {
    * WHEN  the real password login is performed (the harness's own flow)
    * AND   the browser GETs the protected path with NO ?redirect= and no
    *       Referer (no carrier)
-   * THEN  the response is a 302 to /securityRealm/mfa?redirect=&lt;context
+   * THEN  the response is a 302 to /mfa?redirect=&lt;context
    *       root&gt; — never a dead path (the plan's case-1 root fallback)
    * WHEN  the same protected GET carries ?redirect=&lt;the protected job
    *       path&gt; (an in-site carrier)
@@ -186,7 +186,7 @@ class MfaFilterIT {
         "an enrolled, unverified user is bounced by the live gate (302): " + bounce.getStatusCode());
     String location = bounce.getResponseHeaderValue("Location");
     assertNotNull(location);
-    assertTrue(location.contains("/securityRealm/mfa"),
+    assertTrue(location.contains("/mfa"),
         "the bounce must land on the MFA page: " + location);
     assertEquals(ctxRoot(ctx), extractRedirectParam(location),
         "the no-carrier bounce must fall back to the context root, not a dead path: " + location);
@@ -328,7 +328,7 @@ class MfaFilterIT {
    *       username:token (what core 2.528.3's
    *       BasicHeaderApiTokenAuthenticator marks, in-chain, ahead of the
    *       plugin filter)
-   * THEN  the response is 200 with no 302 to securityRealm/mfa
+   * THEN  the response is 200 with no 302 to /mfa
    * </pre>
    *
    * <p>WHY/SOLVES: {@code MfaFilter}'s step 2 is the load-bearing exemption.
@@ -366,7 +366,7 @@ class MfaFilterIT {
         "an API-token request must reach the protected endpoint (200), not be gated: "
             + resp.getStatusCode());
     String loc = resp.getResponseHeaderValue("Location");
-    assertTrue(loc == null || !loc.contains("securityRealm/mfa"),
+    assertTrue(loc == null || !loc.contains("/mfa"),
         "an API-token request must NOT be redirected to the MFA page: " + loc);
   }
 
@@ -441,7 +441,7 @@ class MfaFilterIT {
     WebResponse got = rawGet(c, base, siteJob);
     assertEquals(302, got.getStatusCode(), "a locked, unverified user is still gated (302)");
     assertTrue(got.getResponseHeaderValue("Location") != null
-        && got.getResponseHeaderValue("Location").contains("securityRealm/mfa"),
+        && got.getResponseHeaderValue("Location").contains("/mfa"),
         "the locked user is bounced to the MFA page, not through");
   }
 
@@ -502,7 +502,7 @@ class MfaFilterIT {
           "with policy OFF, an enrolled unverified user reaches the protected path: "
               + r.getStatusCode());
       String loc = r.getResponseHeaderValue("Location");
-      assertTrue(loc == null || !loc.contains("securityRealm/mfa"),
+      assertTrue(loc == null || !loc.contains("/mfa"),
           "policy OFF must not bounce to the MFA page: " + loc);
     } finally {
       cfg.setPolicy(original);
@@ -513,7 +513,7 @@ class MfaFilterIT {
     WebResponse r = rawGet(c, base, siteJob);
     assertEquals(302, r.getStatusCode(), "with policy restored the gate re-arms (302)");
     assertTrue(r.getResponseHeaderValue("Location") != null
-        && r.getResponseHeaderValue("Location").contains("securityRealm/mfa"),
+        && r.getResponseHeaderValue("Location").contains("/mfa"),
         "the restored gate bounces the unverified user to the MFA page");
   }
 
@@ -535,7 +535,7 @@ class MfaFilterIT {
    *       which persists trustedUntilMs ≈ now + 30 days
    * WHEN  a SECOND fresh browser (no session, no trust cookie, brand-new
    *       JSESSIONID) logs in with A's password
-   * THEN  the protected-path GET → 200 with NO 302 to securityRealm/mfa
+   * THEN  the protected-path GET → 200 with NO 302 to /mfa
    *       — the remembered window governs this future login
    * </pre>
    *
@@ -580,7 +580,7 @@ class MfaFilterIT {
             + "path directly — trustedUntilMs governs future logins (or-branch): "
             + got.getStatusCode());
     String loc = got.getResponseHeaderValue("Location");
-    assertTrue(loc == null || !loc.contains("securityRealm/mfa"),
+    assertTrue(loc == null || !loc.contains("/mfa"),
         "the trusted re-login must NOT be bounced to the MFA page: " + loc);
   }
 
@@ -599,7 +599,7 @@ class MfaFilterIT {
    * <pre>
    * GIVEN an enrolled user on a MFA-verified session (the gate passes it)
    * WHEN  a GET is made to a protected path that has no view
-   * THEN  the final response is NOT a 302 to securityRealm/mfa
+   * THEN  the final response is NOT a 302 to /mfa
    *       (the core's own 4xx/error page is what renders — no loop)
    * </pre>
    *
@@ -639,9 +639,9 @@ class MfaFilterIT {
     // (sendError → ERROR dispatch on re-entry), not a normal response.
     WebResponse resp = follow(c, base, siteJob + "no-such-action");
     String loc = resp.getResponseHeaderValue("Location");
-    assertTrue(loc == null || !loc.contains("securityRealm/mfa"),
+    assertTrue(loc == null || !loc.contains("/mfa"),
         "a core error dispatch must not be bounced into the gate (recursion guard): " + loc);
-    assertTrue(resp.getStatusCode() != 302 || loc == null || !loc.contains("securityRealm/mfa"),
+    assertTrue(resp.getStatusCode() != 302 || loc == null || !loc.contains("/mfa"),
         "no 302 into the MFA page off an error dispatch: status=" + resp.getStatusCode());
   }
 
@@ -750,13 +750,25 @@ class MfaFilterIT {
 
   // ---- Raw I/O ---------------------------------------------------
 
-  /** A raw GET (no redirect following) — the wire assertions live here. */
+  /** A raw GET that truly stops at the first response — 302s are NOT
+   *  followed, so {@code getStatusCode()/Location} describe the gate's own
+   *  bounce, not the page behind it. (The client follows redirects by
+   *  default; A19's defect was exactly that this helper's original
+   *  "no redirect following" contract was never honoured, so the 404/500
+   *  "gate" failures were in fact the *destination* page's status — the
+   *  gate's 302 itself was correct on both counts. Restored here with an
+   *  explicit toggle instead of a second client, so the session/cookies —
+   *  and any state the case just set on this client — stay in play.) */
   private WebResponse rawGet(JenkinsRule.WebClient c, URL base, String path) throws Exception {
     WebRequest req = new WebRequest(href(base, path));
+    boolean was = c.isRedirectEnabled();
+    c.setRedirectEnabled(false);
     try {
       return c.loadWebResponse(req);
     } catch (FailingHttpStatusCodeException e) {
       return e.getResponse();
+    } finally {
+      c.setRedirectEnabled(was);
     }
   }
 
@@ -816,7 +828,7 @@ class MfaFilterIT {
    */
   private JSONObject postMfaForm(JenkinsRule.WebClient c, URL base, String endpoint,
       String crumbValue, NameValuePair... fields) throws Exception {
-    WebRequest req = new WebRequest(href(base, "securityRealm/mfa/" + endpoint), HttpMethod.POST);
+    WebRequest req = new WebRequest(href(base, "mfa/" + endpoint), HttpMethod.POST);
     List<NameValuePair> params = new ArrayList<>();
     params.add(new NameValuePair(this.crumbName, crumbValue));
     for (NameValuePair f : fields) {

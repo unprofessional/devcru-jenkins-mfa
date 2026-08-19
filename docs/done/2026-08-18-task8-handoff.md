@@ -1,5 +1,24 @@
 # Task 8 handoff — MfaFilterIT (third write; two production defects found)
 
+> **TASK 8 LANDED 2026-08-19.** The ruling mads owed (Defect B mount move)
+> was answered: **"I agree with your recommendation. Proceed."** The 6-point
+> sweep executed in one pass, and — because the page was finally *served*
+> over HTTP on a green path — the IT fired on **five** defects in all, all
+> resolved: A16 (gate path evaluated as `/`), A17 (the `securityRealm/mfa`
+> mount squatted by the live realm — moved to `/mfa` per the ruling), A18
+> (`<x:out>` is not a tag on this runtime; the page 500'd on render; now
+> `j:out` in the two text positions, crumb interpolated raw as core's own
+> crumb-bearing views do), A19 (the IT's own `rawGet` was following the
+> bounce's 302 — four "gate" failure rounds were actually the destination
+> page's status; the gate's 302 was correct throughout), and A20
+> (`postVerify`/`postResendEmail` carried no dispatch token — Stapler
+> auto-maps only get/is/do-prefixed methods, `@RequirePOST` is policy — the
+> verify/resend buttons would have been dead for every user; now
+> `@WebMethod`-declared with the tokens the page's JS already posts). The
+> IT is 7/7. TECH_DEBT carries A15 (Bearer gap, open for ruling) +
+> A16–A20. This doc is the historical record of where the work stood;
+> everything below it is superseded by the landing commit.
+
 **Written by Sebastian, 2026-08-19.** Supersedes the second write (committed
 `3b45151`) and the first (committed `53b1334`). Read top to bottom; the old
 versions' seam tables are partly stale now (context path and endpoint paths

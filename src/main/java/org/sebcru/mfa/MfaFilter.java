@@ -21,7 +21,7 @@ import org.springframework.security.core.Authentication;
 /**
  * The MFA gate (Task 7) — the servlet filter that bounces a
  * password-authenticated, still-MFA-unverified user to the second-factor
- * page at {@code <root>/securityRealm/mfa}.
+ * page at {@code <root>/mfa}.
  *
  * <h2>The decision chain (the plan's §Task 7, exact order)</h2>
  * <pre>
@@ -119,16 +119,20 @@ public final class MfaFilter implements Filter {
   /** The {@code ?redirect=…} query parameter the gate hands to the MFA page. */
   static final String REDIRECT_PARAM = "redirect";
 
-  // Path allow-list (step 4/5): the authentication flow itself, the MFA page
-  // (via its "securityRealm" prefix — the plan's redundant "/securityRealm/
-  // mfa" entry is intentionally not listed separately), Jenkins' own static
-  // resource routes, and the skins/plugins theme assets a browser always
-  // fetches on first paint. Anything not covered stays gated.
+  // Path allow-list (step 4/5): the authentication flow itself, the MFA page,
+  // Jenkins' own static resource routes, and the skins/plugins theme assets a
+  // browser always fetches on first paint. Anything not covered stays gated.
+  // Note: "/securityRealm" is NOT on this list any more (Task 8, Defect B):
+  // under a ModelObject-backed local realm it is the realm's own mount tree,
+  // which is already anonymous-reachable through step 3 — and the MFA page
+  // moved to the free single segment "/mfa" precisely because that prefix
+  // is squatted on every production local-realm deployment.
   private static final String[] ALLOWED_PREFIXES = {
     "/login", "/logout", "/postlogout", "/logoutpost",
     "/signup",
     "/j_acegi",
-    "/securityRealm",      // the MFA page itself, and the auth flow's home
+    "/mfa",                // the MFA page itself (Defect B: /securityRealm/*
+                           // is the live realm's own mount, not ours)
     "/static/", "/images/", "/adjuncts/", "/scripts/", "/css/", "/crumbIssuer"
   };
 
@@ -389,8 +393,8 @@ public final class MfaFilter implements Filter {
 
   /**
    * The request's in-site path for the allow-list test: the request URI
-   * minus the context path (e.g. "/jenkins/securityRealm/mfa" at ctx
-   * "/jenkins" → "/securityRealm/mfa"), folded with the query string so a
+   * minus the context path (e.g. "/jenkins/mfa" at ctx
+   * "/jenkins" → "/mfa"), folded with the query string so a
    * "path?x=y" request is tested on its full form.
    *
    * <p><b>Why not {@code getServletPath()}:</b> on the Jenkins 2.528.3
@@ -419,7 +423,9 @@ public final class MfaFilter implements Filter {
   }
 
   /**
-   * The 302: Location = &lt;context&gt;/securityRealm/mfa?redirect=&lt;validated&gt;.
+   * The 302: Location = &lt;context&gt;/mfa?redirect=&lt;validated&gt;.
+   * (Defect B, 2026-08-19: the page moved from /securityRealm/mfa to /mfa —
+   * under HPSR the realm owns the top-level securityRealm mount.)
    * Terminal — the chain is deliberately not called past the redirect; the
    * request is consumed by it.
    */
@@ -429,7 +435,7 @@ public final class MfaFilter implements Filter {
     String ctx = (http.getContextPath() == null) ? "" : http.getContextPath();
     rsp.setHeader("Cache-Control", "no-cache,no-store,must-revalidate");
     rsp.setStatus(HttpServletResponse.SC_FOUND);
-    rsp.sendRedirect(ctx + "/securityRealm/mfa?" + REDIRECT_PARAM + "=" + encode(target));
+    rsp.sendRedirect(ctx + "/mfa?" + REDIRECT_PARAM + "=" + encode(target));
   }
 
   /**

@@ -41,7 +41,7 @@ factor.
 │          ├── PASS (verified session · trust live · API token · exempt ·          │
 │          │        unenrolled · anonymous) ────────────> Stapler ──> app pages    │
 │          │                                                                       │
-│          └── NO ── 302 ──> <root>/securityRealm/mfa?redirect=…  (in-site target) │
+│          └── NO ── 302 ──> <root>/mfa?redirect=…  (in-site target)              │
 └──────────────────────────────────────────────────────────────────────────────────┘
                                                         │ 302
                                                         ▼
@@ -141,7 +141,7 @@ Tasks 1–6 plain-JUnit-testable with no Jenkins VM. Only the *glue*
 ```
  browser                          MfaController                    brains
     │                                │                                │
-    │ GET /securityRealm/mfa         │                                │
+    │ GET /mfa                       │                                │
     ├───────────────────────────────>│ page model: issuer, masked     │
     │<───────────────────────────────│ email, factor flags, crumb     │
     │                                │                                │
@@ -374,7 +374,7 @@ keeps *this* window open. (Noted in the audit, A6.)
 
 | Registration | Class | Effect |
 |---|---|---|
-| `RootAction` @Extension | `MfaController` | mounts the page at `<root>/securityRealm/mfa` *(not* a `GlobalAction` — that type does not exist in core 2.528.3; Task 6 deviation 1) |
+| `RootAction` @Extension | `MfaController` | mounts the page at `<root>/mfa` *(not* a `GlobalAction` — that type does not exist in core 2.528.3; Task 6 deviation 1. The mount was originally `securityRealm/mfa` but Task 8's booted-Jenkins IT proved that prefix is squatted by the live realm's own `ModelObject` mount on every local-realm deployment — Task 8 deviation 2, mads-ruled 2026-08-19) |
 | `GlobalConfiguration` @Extension | `DevcruMfaConfig` (+ nested descriptor via inheritance) | Manage Jenkins → Security form (`config.jelly`), persisted `DevcruMfaConfig.xml` |
 | `UserPropertyDescriptor` @Extension (nested `DescriptorImpl`) | `MfaUserProperty` | user security-profile section; the data-binding entry point for the user-owned fields |
 | **`@Extension` (plain class, NOT a `hudson.Plugin` subclass)** | `DevcruMfaPlugin (Task 7)` | the gate's **filter registration**: `static @Initializer(after=EXTENSIONS_AUGMENTED) → PluginServletFilter.addFilter(filter)` + `@Terminator → removeFilter(filter)`; one shared `MfaFilter` instance (see §9.8 for why not `hudson.Plugin`, and §9.7 for why not `after=STARTED`) |
