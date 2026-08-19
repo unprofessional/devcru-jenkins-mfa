@@ -337,15 +337,14 @@ class MfaFilterIT {
    * factor — a silent, expensive break. Re-pinning the attribute against a
    * real security chain is the cheapest live proof it still holds.
    *
-   * <p><b>A15 (named gap, TECH_DEBT):</b> the plan's case 3 specifies
-   * {@code Authorization: Bearer *** but jenkins-core 2.528.3 has
-   * <em>no</em> Bearer token authenticator (verified — only
-   * {@code BasicHeader*} token classes exist). This IT therefore pins the
-   * <strong>Basic</strong> header, and Bearer is a ruling-needed gap for
-   * mads: either core gains Bearer in a future LTS and the seam follows, or
-   * the ruling is "attribute is the contract on 2.528.3 and the plan's
-   * Bearer line is void". The attribute check is the right shape for either
-   * outcome — nothing in the filter changes on ruling.
+   * <p><b>A15 / A21 (now LANDED):</b> the plan's case 3 specified a Bearer
+   * API-token request. jenkins-core 2.528.3 has <em>no</em> core Bearer
+   * authenticator, so A21 (mads ruling 2026-08-19) is a home-grown Bearer
+   * authenticator in this plugin — see the sibling case
+   * {@code bearerTokenExemptFromGate} in this suite, which pins the same
+   * gate exemption over a real Bearer header on a booted Jenkins. This
+   * Basic case stands as the proof of the core-owned Basic path; the two
+   * cases together pin that the exemption contract is identical for both.
    */
   @Test
   void apiTokenExemptFromGate(JenkinsRule rule) throws Exception {
@@ -369,6 +368,154 @@ class MfaFilterIT {
     assertTrue(loc == null || !loc.contains("/mfa"),
         "an API-token request must NOT be redirected to the MFA page: " + loc);
   }
+
+  // ==================================================================
+  // Case 3b — A21: Bearer API-token request is exempt from the gate the
+  // same way Basic is (home-grown Bearer authenticator, booted proof).
+  // ==================================================================
+
+  /**
+   * WHAT: a Bearer API-token request — sent with {@code Authorization:
+   * Bearer *** + the A21 companion {@code X-Jenkins-User} header, the exact
+   * documented client contract of the home-grown {@link BearerTokenFilter} —
+   * is <strong>exempt from the gate</strong> exactly like the equivalent Basic
+   * request ({@code apiTokenExemptFromGate}): 200, no 302 to the MFA page, on
+   * a <em>booted</em> Jenkins with a <em>real</em> API token.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN an enrolled TOTP user, a REAL api token minted via
+   *       rule.createApiToken (the same primitive the Basic IT uses), and
+   *       policy REQUIRED, and a fresh unauthed web client (anonymous)
+   * WHEN  the protected /api/json is fetched with
+   *       Authorization: Bearer ***  AND X-Jenkins-User: &lt;user&gt;
+   * THEN  the BearerTokenFilter (which core's absent Bearer authenticator
+   *       would never set) recognises the token, sets the api-token request
+   *       attribute + the security context, the gate sees the attribute and
+   *       EXEMPTs the request
+   * AND   the response is 200 with no 302 to /mfa
+   * </pre>
+   *
+   * <p>WHY/SOLVES: this is A21's acceptance criterion (b) — the load-bearing
+   * proof that a Bearer client (the convention a wide range of tooling, CI,
+   * and the rest of the ecosystem uses) is NOT broken by the live gate. jenkins-core
+   * 2.528.3 has <em>no</em> Bearer authenticator, so without the home-grown filter
+   * every such request would be anonymous and, for an enrolled user, bounced to
+   * the MFA page or denied. Pinning the 200 / no-{@code /mfa} on a real booted
+   * token is the only proof the exemption wiring actually holds end-to-end (the
+   * unit suite pins the <em>parse</em>; this pins the <em>glue</em>).
+   *
+   * <p><b>Negative (A21 step 6 — fail-open, no oracle).</b> The same method
+   * also runs the mismatch half of the contract:
+   * <pre>
+   * GIVEN the same real token, policy REQUIRED, and a fresh anonymous client
+   * WHEN  a baseline /api/json with NO headers at all is fetched
+   * AND   the same /api/json is fetched with Authorization: Bearer ***
+   *       token but X-Jenkins-User naming a WRONG caller id
+   * THEN  the wrong-caller response's status AND Location are byte-for-byte
+   *       identical to the no-token baseline — the filter touched nothing
+   *       (no attr, no context), so a bad caller is indistinguishable from
+   *       no token (no oracle for token/caller-id probing)
+   * </pre>
+   * <p>WHY/SOLVES: fail-open is the security-critical half of A21. A 500 would
+   * turn token probing into a DoS; a 302 to /mfa would mean the filter
+   * authenticated the enrolled user from a WRONG caller id — turning Bearer
+   * into a user-id oracle and defeating the gate's whole point. In this
+   * harness the anonymous user has read access to the job API, so "no token"
+   * is 200; the wrong-caller Bearer must be 200 too, not a bounce. If
+   * anonymous access is ever removed from this Jenkins, both sides of the
+   * comparison move together (the assertion compares the two, not a hardcoded
+   * status), so the no-oracle guarantee keeps pinning itself.
+   */
+  @Test
+  void bearerTokenExemptFromGate(JenkinsRule rule) throws Exception {
+    String user = "it-bearer";
+    String pw = "secret123";
+    String secret = Totp.newBase32Secret();
+    User u = enrollTotp(user, pw, secret);
+    String job = rule.createProject(FreeStyleProject.class, "it-bearer-job").getFullName();
+    URL base = rule.getURL();
+
+    String token = rule.createApiToken(u);
+    JenkinsRule.WebClient api = rule.createWebClient();
+    api.setJavaScriptEnabled(false);
+    api.setThrowExceptionOnFailingStatusCode(false);
+
+    WebRequest req = new WebRequest(href(base, "/job/" + job + "/api/json"));
+    req.setAdditionalHeader("Authorization", "Bearer " + token);
+    req.setAdditionalHeader(BearerTokenFilter.HEADER_USER, user);
+    WebResponse resp;
+    boolean was = api.isRedirectEnabled();
+    api.setRedirectEnabled(false);
+    try {
+      resp = api.loadWebResponse(req);
+    } catch (FailingHttpStatusCodeException e) {
+      resp = e.getResponse();
+    } finally {
+      api.setRedirectEnabled(was);
+    }
+    assertEquals(200, resp.getStatusCode(),
+        "a Bearer API-token request must reach the protected endpoint (200), "
+            + "not be gated: " + resp.getStatusCode());
+    String loc = resp.getResponseHeaderValue("Location");
+    assertTrue(loc == null || !loc.contains("/mfa"),
+        "a Bearer API-token request must NOT be redirected to the MFA page: " + loc);
+
+    // ---- Fail-open (A21 step 6): a Bearer token presented for the WRONG
+    // caller id must behave EXACTLY like a plain, no-headers anonymous request
+    // — not 500, not a /mfa bounce, nothing the filter "did" to the request.
+    //
+    // jenkins-core 2.528.3 has no Bearer authenticator and the filter refuses
+    // the O(n) every-user scan, so a Bearer with no (or a wrong) companion user
+    // is "not a Bearer request" for this filter: it touches nothing (no attr, no
+    // context change) and the request stays anonymous. The security load here is
+    // the NO-ORACLE property — a caller probing with a wrong user id must see no
+    // difference at all from sending no token (so there is nothing to signal a
+    // valid token). In THIS harness the anonymous user has read access to the
+    // job API, so "no token" is 200; the wrong-caller Bearer MUST be 200 exactly
+    // like the no-token baseline, and must NOT be a 302 to /mfa (which would
+    // mean the filter authenticated the enrolled user and the gate then bounced
+    // — i.e. a wrong caller got treated as the real, enrolled caller).
+    JenkinsRule.WebClient anon = rule.createWebClient();
+    anon.setJavaScriptEnabled(false);
+    anon.setThrowExceptionOnFailingStatusCode(false);
+
+    WebRequest plain = new WebRequest(href(base, "/job/" + job + "/api/json"));
+    WebResponse p2;
+    boolean wasp = anon.isRedirectEnabled();
+    anon.setRedirectEnabled(false);
+    try {
+      p2 = anon.loadWebResponse(plain);
+    } catch (FailingHttpStatusCodeException e) {
+      p2 = e.getResponse();
+    } finally {
+      anon.setRedirectEnabled(wasp);
+    }
+
+    WebRequest bad = new WebRequest(href(base, "/job/" + job + "/api/json"));
+    bad.setAdditionalHeader("Authorization", "Bearer " + token);
+    bad.setAdditionalHeader(BearerTokenFilter.HEADER_USER, "not-" + user);  // wrong caller
+    WebResponse r2;
+    boolean was2 = anon.isRedirectEnabled();
+    anon.setRedirectEnabled(false);
+    try {
+      r2 = anon.loadWebResponse(bad);
+    } catch (FailingHttpStatusCodeException e) {
+      r2 = e.getResponse();
+    } finally {
+      anon.setRedirectEnabled(was2);
+    }
+    assertEquals(p2.getStatusCode(), r2.getStatusCode(),
+        "a Bearer token named for the WRONG caller id must be indistinguishable "
+            + "from a plain no-token request (no oracle, fail-open): "
+            + "no-token=" + p2.getStatusCode() + " wrong-caller=" + r2.getStatusCode());
+    String loc2 = r2.getResponseHeaderValue("Location");
+    assertEquals(p2.getResponseHeaderValue("Location"), loc2,
+        "a wrong-caller Bearer request must have the same Location as the no-token "
+            + "baseline (i.e. the filter treated it as 'no Bearer' — not as the "
+            + "enrolled caller being bounced to /mfa): " + loc2);
+  }
+
 
   // ==================================================================
   // Case 4 — lockout: dense wrong codes trip the 15-minute lockout.
