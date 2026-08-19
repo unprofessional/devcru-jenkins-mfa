@@ -14,6 +14,12 @@
 >    voiding the plan line or waiting on core. Tracked as its own small
 >    task; no new dependency (Spring Security is `provided`/transitive and
 >    Jenkins does not run its web filter chain).
+> 3. **Task 9 view-path correction (verified 2026-08-19 against core sources,
+>    recorded on the Task 9 section):** the security-tab section renders from
+>    `org/sebcru/mfa/MfaUserProperty/config.jelly` (the descriptor's
+>    `configPage`), not `views/MfaUserProperty.jelly`, and must NOT nest an
+>    `f:form` (the tab already supplies one, wrapped in `f:rowSet`). A wrong
+>    view path fails silently — the IT must assert the section renders.
 
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
 
@@ -604,25 +610,127 @@ Auth in tests: use the crumb — `CrumbIssuer.get(req).issueFor(Jenkins.ANONYMOU
 
 ### Task 9: User-facing factor management page (security profile)
 
-**Objective:** Enroll/disable factors from **Manage account → Security**, with QR (zxing) — this replaces the old plugin's paywalled UI.
+**Objective:** Enroll/disable factors from **Manage account → Security**, with
+QR (zxing) — this replaces the old plugin's paywalled UI.
+
+**CORRECTION (verified 2026-08-19, against jenkins-core 2.528.3 sources) — read
+this first, it overrides the file list below:**
+
+1. **The view lives at `src/main/resources/org/sebcru/mfa/MfaUserProperty/config.jelly` — NOT
+   `org/sebcru/mfa/views/MfaUserProperty.jelly` as originally sketched.** Core's security-tab
+   page (`hudson/model/userproperty/UserPropertyCategorySecurityAction/index.jelly`) does
+   `st:include from="${d}" page="${d.configPage}"`, i.e. it resolves the view
+   *relative to the descriptor* (`Descriptor.getConfigPage()` = `"config"` by default).
+   An `f:` form is bound to the property's `reconfigure(JsonObject)` →
+   `@DataBoundSetter`s, so the section needs no custom submit action at all.
+   **A view at the wrong path fails *silently* — the tab renders with an
+   empty section and nothing else in the build complains.** The IT must
+   assert the section is actually present on the live page (below).
+2. **NO nested `<f:form>` in the section.** The core security tab already
+   wraps everything in one `<f:form action="configSubmit">` and wraps each
+   property in `<f:rowSet name="userProperty${i}">`. Nested forms break
+   browser form behaviour; the original sketch's "f:form with f:entries"
+   must not be taken literally — the section is a set of
+   `f:invisibleEntry` (dummy, so the rowSet always has an entry) +
+   `f:entry`/`f:block` fields only, no form tag, no save button. Copy the
+   shape of core's own live example, `jenkins/console/ConsoleUrlProviderUserProperty/config.jelly`
+   (it starts with `<j:if test="${descriptor.enabled}">`).
+3. **The `@WebMethod` block below still stands** (A20, added 2026-08-19): every
+   one of the five `post*` endpoints needs `@WebMethod(name = "…")` in its
+   **own commit** — Stapler auto-maps only get/is/do-prefixed methods; a bare
+   `postEnrollTotp` exposes no dispatch token and 404s. `@RequirePOST` is
+   policy, not routing.
 
 **Files:**
-- Create: `src/main/resources/org/sebcru/mfa/views/MfaUserProperty.jelly` — form bound to `MfaUserProperty` (`f:form` with `<f:entry>`s): TOTP secret (read-only + "Generate" hidden action + QR `<img>` via `data:` URI built server-side with zxing `MultiFormatWriter().encode(otpauthUri, BarcodeFormat.QR_CODE, 300,300)`); confirm-code field to finalize enrollment (`postConfirmEnroll` controller action: verify before committing the secret); registered email field + "Send test code" (cooldown); "Disable factor" buttons; "Revoke remembered devices" (clears trust).
-- Extend `MfaController` with `postEnrollTotp`, `postDisableTotp`, `postDisableEmail`, `postRevokeTrust` (each JSON, crumb-checked by core).
+- Create: `src/main/resources/org/sebcru/mfa/MfaUserProperty/config.jelly`
+  (path per correction 1 above) — the section:
+  - **TOTP:** hidden `f:invisibleEntry` dummy; "Generate new seed" button →
+    POST `<ctx>/mfa/postEnroll` (JSON: new Base32 seed + `otpauth://` URI);
+    the section renders the seed (masked `Secret.toStringMasked()` style, as
+    the login page does for the email) + QR `<img src="data:image/png;base64,…">`
+    built server-side with zxing
+    (`MultiFormatWriter().encode(uri, BarcodeFormat.QR_CODE, 300, 300)` →
+    ByteArrayOutputStream → Base64; the dep is already in `pom.xml`,
+    `zxing 3.5.3`); a confirm-code field; "Confirm & enable" POSTs
+    `postEnrollConfirm` with `{seed, code}`.
+  - **Email:** `f:entry field="registeredEmail"` (masked input, as the login
+    page) + "Send test code" button → `postEmailTestCode` (reuses the
+    `EmailCodeIssuer.resend`/`issue` + resend-cooldown path, same shape as
+    the login page's `postResendEmail`).
+  - **Manage:** "Disable TOTP" (`postDisableTotp`), "Disable email"
+    (`postDisableEmail`), "Revoke remembered devices" (`postRevokeTrust`,
+    → `TrustStore.revoke(p)` → clears `trustedUntilMs`).
+- Extend `MfaController` with `postEnroll`, `postEnrollConfirm`,
+  `postEmailTestCode`, `postDisableTotp`, `postDisableEmail`,
+  `postRevokeTrust` (each JSON, crumb-checked by core) — all under the
+  existing `/mfa` mount.
 
-  **Correction from Task 8 (A20, 2026-08-19) — every endpoint above needs
-  `@WebMethod(name = "…")`:** Stapler's dynamic-method dispatch auto-maps only
-  get/is/do-prefixed methods; a method named bare `postEnrollTotp` exposes *no
-  dispatch token* and `<ctx>/securityRealm/…` (or any mount) + suffix 404s at
-  dispatch time. `@RequirePOST` is policy, not routing. Task 8's IT caught this
-  on `postVerify`/`postResendEmail` (dead-button risk for every user); do not
-  repeat it. Add `@WebMethod` in the same commit as each endpoint, not as a
-  follow-up.
+**Endpoint contracts (JSON out; `VerifyOutcome`-style error codes, same
+conventions as Task 6):**
 
-**Enrollment safety:** the `otpauth://` URI + displayed secret are only shown **pre-commit**; the secret is written to the property only after a correct confirm code (prevents accidental orphaning of a key the user never registered).
+| endpoint | body | success | failure |
+|---|---|---|---|
+| `postEnroll` | — (admin not required: owns own account) | `{ok:true, seed, otpauthUri, dataUriPng}` | `{ok:false, error:"server_error"}` |
+| `postEnrollConfirm` | `{seed, code}` | `{ok:true}` — seed committed to `MfaUserProperty.totpSecret` | `{ok:false, error:"wrong_code"}` — **seed NOT committed** |
+| `postEmailTestCode` | — | `{ok:true, resent:true, cooldown}` | `{ok:false, error:"email_not_enrolled" \| "resend_cooldown", retrySeconds}` |
+| `postDisableTotp` | — | `{ok:true}` | `{ok:false, error:"not_enrolled"}` |
+| `postDisableEmail` | — | `{ok:true}` | `{ok:false, error:"not_enrolled"}` |
+| `postRevokeTrust` | — | `{ok:true}` | — (always a no-op-safe success) |
 
-**Verification:** `mvn clean verify` (full, CI-mirror — *not* bare `mvn test`; SpotBugs + `.hpi` packaging included per AGENTS.md) green.
-**Commit:** `feat(ui): factor management on user security page`
+**Enrollment safety (the single-POST commit — no pre-commit staging):** the
+confirm flow is *seed + code in ONE POST*. Core generates the seed when the
+user clicks "Generate," the UI holds it in the form (hidden input) between
+generate and confirm, and `postEnrollConfirm` verifies `code` against
+`Totp.verify(decodeSecret(seed), code, now, cfg.getTotpWindow())` **before**
+writing the `Secret`. No seed ever reaches user-land storage before a
+correct code — and no server-side session state is needed to hold a
+pre-commit secret (which would itself be a credential-in-session problem,
+and would need its own expiry/teardown lifecycle). A regenerate simply
+POSTs `postEnroll` again and replaces the hidden seed + QR.
+
+**A2 mint path — the second, real one:** the email `Secret emailCodeSecret`
+must be lazily minted when the email factor becomes live. It is minted
+**exactly** inside `MfaController.ensureEmailCodeSecret(p)` (idempotent,
+128-bit, `Secret`-encrypted, only behind `hasEmailFactor()`) — the same
+seam the login-page `postResendEmail` already uses. The profile's
+`postEmailTestCode` and the login-page flow both route through it; no
+second mint implementation is allowed (single seam, per the A2 ruling).
+
+**Data-binding boundary (why the form can't forge trust/lockout state):**
+`MfaUserProperty` deliberately has `@DataBoundSetter` on **only**
+`setTotpSecret` and `setRegisteredEmail`; `trustedUntilMs`,
+`failedAttemptStreak`, `lastVerifiedFactor`, and the pending-code state are
+plain getters/setters for server code only. `f:rowSet` + `configSubmit`
+binds through `reconfigure` → `@DataBoundSetter` only, so a malicious or
+buggy form can never set a 30-day trust expiry or zero out the attempt
+counter. **Do not add a `@DataBoundSetter` to any server-managed field to
+"fix" a missing value — that is a security boundary, not an oversight.**
+Note the consequence: the TOTP seed is committed via
+`postEnrollConfirm` (JSON endpoint), not via `configSubmit` — `configSubmit`
+only carries `registeredEmail` (and the dummy field).
+
+**Testing / verification:**
+- Unit (plain JVM, BDD-documented per `AGENTS.md`, `TotpTest` shape): the
+  `postEnroll`/`postEnrollConfirm` decision seam extracted pure (seed
+  validation: is-it-a-valid-base32, code-verifies, already-enrolled →
+  replace semantics), same as `MfaController`'s existing `verifyTotp` seam.
+- `MfaFilterIT` (or a new `MfaProfileIT` — prefer extending the existing
+  suite, it already has login + crumb + post helpers): (a) login as an
+  enrolled user, GET the security page, **assert the section is actually
+  rendered** (guards the view-path correction above — the silent-empty-page
+  failure mode); (b) `postEnroll` → JSON with seed; `postEnrollConfirm`
+  with a correct `Totp.codeAt` → `ok:true` AND the property now
+  `hasTotpFactor()`; bad code → `wrong_code` AND property unchanged;
+  (c) each disable/revoke endpoint flips the right state; (d) all six
+  endpoints 404-free (the A20 guard — the single-POST design means no
+  session-side pre-commit state to leak).
+- **`mvn clean verify` (full, CI-mirror) green** — do NOT use bare `mvn test`
+  (it silently skips SpotBugs, per AGENTS.md; this exact gap shipped a
+  default-charset bug once).
+
+**Commit:** `feat(ui): factor management on user security page` (house
+rules: README "Practical usage" updated in the same commit; `AGENTS.md`
+BDD docs on every new test method).
 
 ---
 
