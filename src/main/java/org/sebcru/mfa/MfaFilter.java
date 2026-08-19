@@ -388,17 +388,33 @@ public final class MfaFilter implements Filter {
   }
 
   /**
-   * The request's in-site path, relative to the context path, for the
-   * allow-list test. Uses {@code getServletPath()} (post-context) and folds
-   * in the query string so a "path?x=y" request is tested on its full form.
-   * A null servlet path (should not happen for an HttpServletRequest, but
-   * the gate must not NPE on an odd dispatch) degrades to "/" — the
-   * fail-closed default.
+   * The request's in-site path for the allow-list test: the request URI
+   * minus the context path (e.g. "/jenkins/securityRealm/mfa" at ctx
+   * "/jenkins" → "/securityRealm/mfa"), folded with the query string so a
+   * "path?x=y" request is tested on its full form.
+   *
+   * <p><b>Why not {@code getServletPath()}:</b> on the Jenkins 2.528.3
+   * servlet stack (embedded Jetty, Stapler dispatch) {@code getServletPath()}
+   * returns an empty string for gated requests, so the allow-list test
+   * would run against "/" and the MFA page itself would 302 to itself
+   * forever ("Too many redirects" — caught by the Task 8 IT, 2026-08-19).
+   * {@code getRequestURI()} − context path is the portable, spec-defined
+   * decomposition and is what {@code MfaController} already resolves from.
+   * A null/odd URI degrades to "/" — the fail-closed default.
    */
   private static String targetPath(HttpServletRequest http) {
-    String sp = http.getServletPath();
+    String uri = http.getRequestURI();
+    String ctx = http.getContextPath();
+    String base;
+    if (uri == null || uri.isEmpty()) {
+      base = "/";
+    } else if (ctx != null && !ctx.isEmpty() && uri.startsWith(ctx)) {
+      String rest = uri.substring(ctx.length());
+      base = rest.isEmpty() ? "/" : rest;
+    } else {
+      base = uri;
+    }
     String qs = http.getQueryString();
-    String base = (sp == null || sp.isEmpty()) ? "/" : sp;
     return (qs == null || qs.isEmpty()) ? base : base + "?" + qs;
   }
 

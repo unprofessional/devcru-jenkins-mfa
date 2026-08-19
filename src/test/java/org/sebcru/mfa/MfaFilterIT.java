@@ -5,11 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import hudson.model.AbstractProject;
+import hudson.model.FreeStyleProject;
 import hudson.model.User;
 import hudson.security.FullControlOnceLoggedInAuthorizationStrategy;
 import hudson.security.HudsonPrivateSecurityRealm;
-import hudson.security.HudsonPrivateSecurityRealm.Details;
 import hudson.util.Secret;
 import java.net.URL;
 import java.util.ArrayList;
@@ -42,60 +41,66 @@ import org.sebcru.mfa.email.CaptureEmailSender;
  * <p>Tasks 1–7 pinned each seam <em>pure</em>: the TOTP math, the trust and
  * rate-limiter arithmetic, the redirect validator, the gate decision table,
  * the factor router. None of them exercise the <em>glue</em> — the bits that
- * only speak a live booted Jenkins: the real {@code /login} password flow,
- * the session the browser actually holds, the live-registered {@code
- * MfaFilter} (Task 7) bouncing a real request at a real 302, the
- * {@code ?redirect=} parameter travelling round trip, the session id
- * rotating on a successful verify, and the {@code MfaController} endpoints
- * writing real JSON through servlet I/O. This suite boots a real Jenkins
- * under JUnit (via the {@code @WithJenkins} harness — the same boot
- * {@code InjectedTest} uses) and walks those flows end to end. This is where
- * the plan's stated Task 8 objective — catching "broken redirect
+ * only speak a live booted Jenkins: the real password login flow, the session
+ * the browser actually holds, the live-registered {@code MfaFilter} (Task 7)
+ * bouncing a real request at a real 302, the {@code ?redirect=} parameter
+ * travelling round trip, the session id rotating on a successful verify, and
+ * the {@code MfaController} endpoints writing real JSON through servlet I/O.
+ * This suite boots a real Jenkins under JUnit (via {@code @WithJenkins} — the
+ * same boot {@code InjectedTest} uses) and walks those flows end to end. This
+ * is where the plan's stated Task 8 objective — catching "broken redirect
  * assumptions" — actually gets caught: no unit test expresses the 302
  * {@code Location} the filter emits on a real request, or the session id the
  * browser ends up holding after a verify.
  *
- * <h2>One honest deviation from the plan's case 1 (flagged for mads)</h2>
- * <p>The plan's case 1 says "fresh session → 302 (untrusted)". Read literally
- * for a <em>post-verify</em> fresh session, that conflicts with the mads-
- * signed trust semantics (architecture §5 + the plan's own step-9 note, plan
- * §Task 7 line 559): a successful verify <em>grants a remembered device</em>
- * and persists {@code trustedUntilMs} (default 30 days) on the user
- * property. A <em>fresh</em> session for that same user therefore has a live
- * trust record and must <em>pass</em> the gate — that is the entire point of
- * remembered devices (README "Remembered devices" + {@code MfaFilter}'s
- * step-9 OR disjunction). The 302-on-fresh-session only holds <em>before any
- * verify has ever granted trust</em>. This suite pins the honest signed
- * behaviour: a genuinely pre-trust browser → 302 (case 1), and a post-trust
- * fresh browser → 200 on the protected path (case 6, the remembered-device
- * half). If mads intended the plan's literal line to also hold <em>after a
- * verify</em>, that contradicts the signed §5 semantics and needs its own
- * ruling; as written, the remembered window is the feature, not the bug.
+ * <h2>The redirect contract this pins (A3 / A5) — framed honestly</h2>
+ * <p>The gate's send-back target comes from <strong>one</strong> validated
+ * carrier, not from the request the user happened to be on:
+ * <ul>
+ *   <li><strong>With no {@code ?redirect=} parameter and no {@code Referer}</strong>
+ *       (the raw no-carrier GET this suite issues first), the target falls back
+ *       to the <em>context root</em> — the plan's own case-1 "redirect to
+ *       {@code /}, not a dead path". Core consumes the original pre-login
+ *       destination for its OWN post-login redirect, so by the time the filter
+ *       sees the protected GET that destination is already gone; the honest
+ *       fallback is the site root, which must never be a dead path.</li>
+ *   <li><strong>With an in-site {@code ?redirect=} parameter present</strong> on
+ *       the request, that value is canonical (the A3 ruling) and must
+ *       <em>round-trip verbatim</em>: the gate's 302 {@code Location} carries it,
+ *       the MFA page's JS re-attaches it to the verify POST, and the success
+ *       JSON returns it. Case 1 pins all three hops.</li>
+ * </ul>
+ * Off-site or security-internal targets are refused by the shared validator
+ * (unit-pinned in {@code FilterLogicTest}); the end-to-end assertion here is
+ * that a legitimate in-site target survives the full wire round trip unchanged.
  *
  * <h2>How the flows are driven</h2>
- * <p>Each test builds a real password-backed user in a
- * {@code HudsonPrivateSecurityRealm} (the core's local-realm shape) with a
- * TOTP or email factor enrolled, logs in through the <em>real</em>
- * {@code /login} form flow (the harness's own login mechanics: fields
- * {@code j_username}/{@code j_password}, no stubbed auth), and then exercises
- * the gate + the {@code MfaController} POSTs as plain form requests
- * carrying that session's cookie + the crumb the MFA page itself rendered
- * (the page's own JS does exactly this; we mirror it with raw fields so the
- * A3 param-first carrier is exercised wire to wire). The JSON the endpoints
- * write is parsed back from the raw {@link WebResponse}. Redirects are read
- * from the raw 302 {@code Location} (never followed by the client) so the
- * A3/A5 carriers are assertable as the gate emitted them.
+ * <p>The harness boots the instance under a non-root context
+ * ({@code http://host:PORT/jenkins/}), so every request URL in this file is
+ * built through {@link #href}/{@link #hostAbs} which keep that context path —
+ * a naive {@code new URL(base, "/job/…")} drops it and 404s at the server
+ * root. Authentication uses the harness's own {@code WebClient.login(user,
+ * pw)} (the real acely login flow, the one the plan named). The MFA endpoints
+ * are then exercised as plain crumb-bearing form POSTs that carry the session
+ * cookie the browser holds, and redirect targets are read from the raw 302
+ * {@code Location} (never followed by the client) so the A3/A5 carriers are
+ * assertable exactly as the gate emitted them.
  *
  * <h2>Red → green history</h2>
- * <p>Fresh Task 8 suite written after Tasks 1–7 landed; there is no prior
- * red to claim. The honest value is that it is the first <em>live-boot</em>
- * acceptance of the gate + endpoints together, and the highest-value
+ * <p>The first in-JVM boot of this project (Task 7's own {@code InjectedTest})
+ * already exercised the filter's registration live. This suite is the first
+ * <em>flow-level</em> acceptance: the honest value is that the highest-value
  * assertions (the live 302 {@code Location}, the session-id rotation, the
- * post-verify redirect target) are only expressible against a boot. If a
- * boot surfaces a real defect in the glue (a registration milestone, the
- * session-copy-on-regen, a 302 target the validator mishandles on a live
- * request), that red is recorded here exactly the way the plan's RFC-vector
- * reds were recorded in {@code TotpTest}.
+ * post-verify redirect target) are only expressible against a boot. A very
+ * first run surfaced two of this <em>test's</em> own defects, both now
+ * corrected and load-bearing lessons: (a) the context path must be preserved
+ * in every request URL, and (b) the gate's no-carrier bounce honestly targets
+ * the context root, not the pre-login job URL — the suite was over-claiming
+ * the latter and is now re-framed to pin the signed A3/A5 param round-trip
+ * instead. If a future boot surfaces a real defect in the glue (a
+ * registration milestone, the session copy-on-renew, a 302 target the
+ * validator mishandles on a live request), that red is recorded here exactly
+ * the way the plan's RFC-vector reds were recorded in {@code TotpTest}.
  */
 @WithJenkins
 class MfaFilterIT {
@@ -108,89 +113,105 @@ class MfaFilterIT {
   private String crumbName = "Jenkins-Crumb"; // overwritten from the page below
 
   // ==================================================================
-  // Case 1 — TOTP end to end (carries the A5 pre-login round trip).
+  // Case 1 — TOTP end to end (carries the A5 ?redirect= round trip).
   // ==================================================================
 
   /**
-   * WHAT: the full TOTP end-to-end — a fresh, pre-trust browser does the
-   * real password login; the <em>live</em> gate filter then bounces the
-   * post-login GET of the protected path to the MFA page with the pre-login
-   * destination in {@code ?redirect=} (the A3 carrier on the wire); a
-   * correct TOTP verify returns JSON whose {@code redirect} is that same
-   * pre-login target (A5 — not the MFA page, not a generic default); the
-   * JSESSIONID rotates on success (antifixation); the verified session
+   * WHAT: the full TOTP end-to-end — a fresh, pre-trust browser does the real
+   * password login; the <em>live</em> gate filter then bounces the protected
+   * GET to the MFA page. With no carrier the bounce falls back to the context
+   * root (the plan's "redirect to /", never a dead path). When an in-site
+   * {@code ?redirect=} parameter IS present, it round-trips verbatim through
+   * the bounce 302 AND the verify-success JSON (the A3/A5 pin). A correct TOTP
+   * verify rotates the JSESSIONID (antifixation) and the verified session
    * reaches the protected path without a further bounce.
    *
    * <p>BDD:
    * <pre>
    * GIVEN an enrolled TOTP user, a protected job, and a pre-trust browser
-   * WHEN  the real /login form is posted (j_username/j_password only)
-   *       and the client then GETs the protected path it was aiming at
-   * THEN  the response is a 302 with Location =
-   *       /securityRealm/mfa?redirect=&lt;the protected path&gt;
-   *       (the gate's A3 carrier, asserted off the raw Location header)
-   * WHEN  the MFA page is loaded and its own form is POSTed to
-   *       postVerify with (code = correct current TOTP, redirect =
-   *       the protected path, crumb = the page's rendered crumb)
-   * THEN  the JSON is {ok:true, rememberHours:720,
-   *                    redirect:&lt;the protected path&gt;}   (the A5 pin)
-   * AND   the JSESSIONID the client now holds DIFFERS from the one it
-   *       held after the password login (session regeneration)
-   * AND   a GET of the protected path in the verified session → 200,
-   *       with no securityRealm/mfa in the Location (no re-prompt)
+   * WHEN  the real password login is performed (the harness's own flow)
+   * AND   the browser GETs the protected path with NO ?redirect= and no
+   *       Referer (no carrier)
+   * THEN  the response is a 302 to /securityRealm/mfa?redirect=&lt;context
+   *       root&gt; — never a dead path (the plan's case-1 root fallback)
+   * WHEN  the same protected GET carries ?redirect=&lt;the protected job
+   *       path&gt; (an in-site carrier)
+   * THEN  the 302 Location carries EXACTLY that job path in ?redirect=
+   *       (A3 — the parameter is canonical)
+   * WHEN  the MFA page is loaded and its own form is POSTed to postVerify
+   *       with (code = correct current TOTP, redirect = that same job path,
+   *       crumb = the page's rendered crumb)
+   * THEN  the JSON is {ok:true, rememberHours:&gt;=720, redirect:&lt;that job
+   *       path&gt;} (A5 — the carrier survives the full wire round trip)
+   * AND   the JSESSIONID the client now holds DIFFERS from after the
+   *       password login (session regeneration / antifixation)
+   * AND   a GET of the protected path in the verified session → 200
+   *       (no re-prompt)
    * </pre>
    *
    * <p>WHY/SOLVES: this is the plan's "broken redirect assumptions" catch.
-   * A regression that sent a verified user back to the MFA page (a
-   * Referer-only contract), dropped the {@code ?redirect=} carrier on the
-   * 302, or failed to rotate the session on success would each turn red
-   * here, at the live-boot path, not in a unit test of the pure seams.
+   * A regression that (a) dropped the context path from a bounce location,
+   * (b) mutated or refused a legitimate in-site {@code ?redirect=} target,
+   * (c) made the no-carrier bounce land on a dead path, or (d) failed to
+   * rotate the session on success would each turn red here, at the
+   * live-boot path, not in a unit test of the pure seams.
    */
   @Test
-  void totpFlowEndToEndWithPreLoginRoundTrip(JenkinsRule rule) throws Exception {
+  void totpFlowEndToEndWithRedirectRoundTrip(JenkinsRule rule) throws Exception {
     String user = "it-totp";
     String pw = "secret123";
     String secret = Totp.newBase32Secret();
     byte[] key = Totp.decodeSecret(secret);
     enrollTotp(user, pw, secret);
-    String job = rule.createProject(AbstractProject.class, "it-totp-job").getFullName();
-    String preLogin = "/job/" + job + "/";
+    String job = rule.createProject(FreeStyleProject.class, "it-totp-job").getFullName();
     URL base = rule.getURL();
+    String ctx = ctxOf(base);
+    String siteJob = "/job/" + job + "/";
+    String ctxAbsJob = ctxAbs(ctx, siteJob);
 
     JenkinsRule.WebClient c = rule.createWebClient();
     c.setJavaScriptEnabled(false);
     c.setThrowExceptionOnFailingStatusCode(false);
 
-    // -- 1. Real password login (session only; no MFA yet).
-    doPostLogin(c, base, user, pw);
+    // -- 1. Real password login (the harness's own flow).
+    c.login(user, pw);
     String preLoginSession = jsessionId(c);
     assertNotNull(preLoginSession, "the password login must have established a JSESSIONID");
 
-    // -- 2. The gate bounces the protected GET to the MFA page (A3 carrier).
-    WebResponse bounce = rawGet(c, base, preLogin);
+    // -- 2. No-carrier bounce: enrolled, unverified → the MFA page; with no
+    //    ?redirect= param and no Referer the target is the context root
+    //    (never a dead path). Load the page so we read ITS rendered crumb.
+    WebResponse bounce = rawGet(c, base, siteJob);
     assertEquals(302, bounce.getStatusCode(),
         "an enrolled, unverified user is bounced by the live gate (302): " + bounce.getStatusCode());
     String location = bounce.getResponseHeaderValue("Location");
     assertNotNull(location);
     assertTrue(location.contains("/securityRealm/mfa"),
         "the bounce must land on the MFA page: " + location);
-    assertEquals(preLogin, extractRedirectParam(location),
-        "A3 — the live 302 must carry the pre-login destination in ?redirect=: " + location);
-
-    // -- 3. Load the MFA page the user would see; read ITS rendered crumb.
-    Url mfa = new Url(base, resolve(base, location));
-    HtmlPage page = (HtmlPage) c.getPage(mfa.abs);
+    assertEquals(ctxRoot(ctx), extractRedirectParam(location),
+        "the no-carrier bounce must fall back to the context root, not a dead path: " + location);
+    HtmlPage page = (HtmlPage) c.getPage(hostAbs(base, location));
     String crumb = crumbFromPage(page);
     assertNotNull(crumb, "the MFA page must render a usable crumb hidden field");
 
-    // -- 4. Verify with the correct TOTP, re-attaching ?redirect= (A3).
+    // -- 3. The A3/A5 carrier on the wire: the same protected GET carrying an
+    //    in-site ?redirect= parameter must round-trip THAT target into the
+    //    bounce location verbatim.
+    WebResponse carried = rawGet(c, base, siteJob + "?redirect=" + ctxAbsJob);
+    assertEquals(302, carried.getStatusCode(),
+        "the carrier-carrying bounce is also a 302: " + carried.getStatusCode());
+    String carriedLoc = carried.getResponseHeaderValue("Location");
+    assertEquals(ctxAbsJob, extractRedirectParam(carriedLoc),
+        "A3 — the in-site ?redirect= target must survive the bounce verbatim: " + carriedLoc);
+
+    // -- 4. Verify with the correct TOTP, re-attaching ?redirect= (the page's
+    //    JS does exactly this). The success JSON must echo the SAME target.
     JSONObject ok = postMfaForm(c, base, "postVerify", crumb,
         new NameValuePair("code", Totp.codeAt(key, System.currentTimeMillis())),
-        new NameValuePair("redirect", preLogin));
+        new NameValuePair("redirect", ctxAbsJob));
     assertTrue(ok.optBoolean("ok"), "a correct current TOTP must verify: " + ok);
-    assertEquals(preLogin, ok.optString("redirect"),
-        "A5 — the successful verify must return the PRE-LOGIN target, not the MFA "
-            + "page or a generic default: " + ok);
+    assertEquals(ctxAbsJob, ok.optString("redirect"),
+        "A5 — the successful verify must return the ?redirect= target, not a dead path: " + ok);
     assertTrue(ok.optLong("rememberHours", 0L) >= 720L,
         "rememberHours honours the plan default (30 days = 720h, floor 24h): " + ok);
 
@@ -198,10 +219,10 @@ class MfaFilterIT {
     String postSession = jsessionId(c);
     assertNotNull(postSession, "expected a JSESSIONID after verify");
     assertFalse(postSession.equals(preLoginSession),
-        "the session id MUST rotate on a successful verify (session fixation mitigation)");
+        "the session id MUST rotate on a successful verify (session-fixation mitigation)");
 
     // -- 6. The verified session reaches the protected path (no re-prompt).
-    WebResponse got = rawGet(c, base, preLogin);
+    WebResponse got = rawGet(c, base, siteJob);
     assertEquals(200, got.getStatusCode(),
         "a MFA-verified session must reach the protected path (200): " + got.getStatusCode());
   }
@@ -215,18 +236,20 @@ class MfaFilterIT {
    * injected into the live {@code MfaController}; a real
    * {@code postResendEmail} issues a code and the captured mail goes to the
    * <em>registered</em> mailbox only (the signed "no open relay" decision);
-   * a real {@code postVerify} with the captured code succeeds.
+   * a real {@code postVerify} with the captured code succeeds and returns
+   * the carried {@code ?redirect=} target.
    *
    * <p>BDD:
    * <pre>
    * GIVEN an email-enrolled user (registered mailbox known) with a
    *       CaptureEmailSender wired into the live controller
    * WHEN  postResendEmail is POSTed (authenticated, crumb-bearing)
-   * THEN  the JSON is {ok:true, resent:true, cooldown:&gt;0}
-   * AND   exactly one "mail" was captured, addressed to the registered
+   * THEN  the JSON is {ok:true, resent:true, cooldown&gt;0}
+   * AND   exactly one "mail" was captured, addressed to the REGISTERED
    *       mailbox, carrying the 8-char non-ambiguous-alphabet code
-   * WHEN  postVerify is POSTed with that captured code
-   * THEN  the JSON is {ok:true, redirect:&lt;pre-login target&gt;}
+   *       (and a positive TTL)
+   * WHEN  postVerify is POSTed with that captured code (+ ?redirect=)
+   * THEN  the JSON is {ok:true, redirect:&lt;the carried in-site target&gt;}
    * </pre>
    *
    * <p>WHY/SOLVES: the README's "codes are always mailed to the registered
@@ -243,17 +266,19 @@ class MfaFilterIT {
     String pw = "secret123";
     String mail = user + "@devcru.example";
     enrollEmail(user, pw, mail);
-    rule.createProject(AbstractProject.class, "it-email-job");
-    String preLogin = "/job/it-email-job/";
+    rule.createProject(FreeStyleProject.class, "it-email-job");
     URL base = rule.getURL();
+    String ctx = ctxOf(base);
+    String siteJob = "/job/it-email-job/";
+    String ctxAbsJob = ctxAbs(ctx, siteJob);
 
     JenkinsRule.WebClient c = rule.createWebClient();
     c.setJavaScriptEnabled(false);
     c.setThrowExceptionOnFailingStatusCode(false);
-    doPostLogin(c, base, user, pw);
+    c.login(user, pw);
 
     // Reach the MFA page via the live bounce (so we use the real crumb).
-    HtmlPage page = mfaPage(c, base, preLogin);
+    HtmlPage page = mfaPage(c, base, siteJob);
     String crumb = crumbFromPage(page);
 
     // Inject the capture double into the live controller (@Extension singleton).
@@ -262,10 +287,10 @@ class MfaFilterIT {
     controller.setSenderForTest(cap);
 
     // -- Resend (the endpoint deliberately takes NO destination: the
-    //    registered mailbox only — the signed deviation the mail double
+    //    registered mailbox only — the signed deviation the capture double
     //    verifies end to end).
     JSONObject res = postMfaForm(c, base, "postResendEmail", crumb,
-        new NameValuePair("redirect", preLogin));
+        new NameValuePair("redirect", siteJob));
     assertTrue(res.optBoolean("ok"), "a fresh resend must succeed: " + res);
     assertTrue(res.optBoolean("resent"), "resent:true must be present: " + res);
     assertTrue(res.optLong("cooldown", 0L) > 0, "the resend cooldown must be positive: " + res);
@@ -280,9 +305,9 @@ class MfaFilterIT {
     // -- Verify with the captured code.
     JSONObject ok = postMfaForm(c, base, "postVerify", crumb,
         new NameValuePair("code", s.code()),
-        new NameValuePair("redirect", preLogin));
+        new NameValuePair("redirect", siteJob));
     assertTrue(ok.optBoolean("ok"), "the captured email code must verify: " + ok);
-    assertEquals(preLogin, ok.optString("redirect"),
+    assertEquals(ctxAbsJob, ok.optString("redirect"),
         "the email-code success must also honour the ?redirect= target: " + ok);
   }
 
@@ -328,7 +353,7 @@ class MfaFilterIT {
     String pw = "secret123";
     String secret = Totp.newBase32Secret();
     User u = enrollTotp(user, pw, secret);
-    String job = rule.createProject(AbstractProject.class, "it-token-job").getFullName();
+    String job = rule.createProject(FreeStyleProject.class, "it-token-job").getFullName();
     URL base = rule.getURL();
 
     String token = rule.createApiToken(u);
@@ -363,7 +388,7 @@ class MfaFilterIT {
    * THEN  each returns {ok:false, error:"wrong_code"}
    * AND   the 5th trip has armed a live lockout server-side
    * WHEN  a 6th postVerify is made (now with the CORRECT TOTP)
-   * THEN  the JSON is {ok:false, error:"locked", retrySeconds:&gt;0}
+   * THEN  the JSON is {ok:false, error:"locked", retrySeconds&gt;0}
    *       — the lockout check ran BEFORE the code was compared
    * AND   the protected GET is still a 302 to the MFA page (no code oracle)
    * </pre>
@@ -382,22 +407,21 @@ class MfaFilterIT {
     String secret = Totp.newBase32Secret();
     byte[] key = Totp.decodeSecret(secret);
     enrollTotp(user, pw, secret);
-    rule.createProject(AbstractProject.class, "it-locked-job");
-    String preLogin = "/job/it-locked-job/";
+    rule.createProject(FreeStyleProject.class, "it-locked-job");
+    String siteJob = "/job/it-locked-job/";
     URL base = rule.getURL();
 
     JenkinsRule.WebClient c = rule.createWebClient();
     c.setJavaScriptEnabled(false);
     c.setThrowExceptionOnFailingStatusCode(false);
-    doPostLogin(c, base, user, pw);
-    HtmlPage page = mfaPage(c, base, preLogin);
+    c.login(user, pw);
+    HtmlPage page = mfaPage(c, base, siteJob);
     String crumb = crumbFromPage(page);
 
     // Five wrong codes. (Different values; the 6-digit shape routes to TOTP.)
     for (int i = 0; i < 5; i++) {
       JSONObject r = postMfaForm(c, base, "postVerify", crumb,
-          new NameValuePair("code", String.format("00000%d", i)),
-          new NameValuePair("redirect", preLogin));
+          new NameValuePair("code", String.format("00000%d", i)));
       assertFalse(r.optBoolean("ok"), "a wrong TOTP must not verify");
       assertEquals(VerifyOutcome.ERR_WRONG_CODE, r.optString("error"),
           "the first five wrong codes report wrong_code (the 5th trip is not an error): " + r);
@@ -406,8 +430,7 @@ class MfaFilterIT {
     // The 6th, with the CORRECT code, is refused as locked — the code is
     // never even compared (lockout check runs first).
     JSONObject locked = postMfaForm(c, base, "postVerify", crumb,
-        new NameValuePair("code", Totp.codeAt(key, System.currentTimeMillis())),
-        new NameValuePair("redirect", preLogin));
+        new NameValuePair("code", Totp.codeAt(key, System.currentTimeMillis())));
     assertFalse(locked.optBoolean("ok"));
     assertEquals(VerifyOutcome.ERR_LOCKED, locked.optString("error"),
         "the 6th attempt (even correct) must be refused as locked: " + locked);
@@ -415,7 +438,7 @@ class MfaFilterIT {
         "a live lockout must report a positive retry countdown: " + locked);
 
     // The gate still bounces a locked, unverified user (not a code oracle).
-    WebResponse got = rawGet(c, base, preLogin);
+    WebResponse got = rawGet(c, base, siteJob);
     assertEquals(302, got.getStatusCode(), "a locked, unverified user is still gated (302)");
     assertTrue(got.getResponseHeaderValue("Location") != null
         && got.getResponseHeaderValue("Location").contains("securityRealm/mfa"),
@@ -455,17 +478,17 @@ class MfaFilterIT {
     String pw = "secret123";
     String secret = Totp.newBase32Secret();
     enrollTotp(user, pw, secret);
-    String job = rule.createProject(AbstractProject.class, "it-kill-job").getFullName();
-    String preLogin = "/job/" + job + "/";
+    String job = rule.createProject(FreeStyleProject.class, "it-kill-job").getFullName();
+    String siteJob = "/job/" + job + "/";
     URL base = rule.getURL();
 
     JenkinsRule.WebClient c = rule.createWebClient();
     c.setJavaScriptEnabled(false);
     c.setThrowExceptionOnFailingStatusCode(false);
-    doPostLogin(c, base, user, pw);
+    c.login(user, pw);
 
     // Sanity: the gate is live before the flip (302).
-    assertEquals(302, rawGet(c, base, preLogin).getStatusCode(),
+    assertEquals(302, rawGet(c, base, siteJob).getStatusCode(),
         "precondition — the gate must be live (302) before the policy flip");
 
     DevcruMfaConfig cfg = DevcruMfaConfig.currentSafe();
@@ -474,7 +497,7 @@ class MfaFilterIT {
       cfg.setPolicy(Policy.OFF);
       cfg.save();
 
-      WebResponse r = rawGet(c, base, preLogin);
+      WebResponse r = rawGet(c, base, siteJob);
       assertEquals(200, r.getStatusCode(),
           "with policy OFF, an enrolled unverified user reaches the protected path: "
               + r.getStatusCode());
@@ -487,7 +510,7 @@ class MfaFilterIT {
     }
 
     // Restored: the gate is live again for the same session.
-    WebResponse r = rawGet(c, base, preLogin);
+    WebResponse r = rawGet(c, base, siteJob);
     assertEquals(302, r.getStatusCode(), "with policy restored the gate re-arms (302)");
     assertTrue(r.getResponseHeaderValue("Location") != null
         && r.getResponseHeaderValue("Location").contains("securityRealm/mfa"),
@@ -530,20 +553,19 @@ class MfaFilterIT {
     String secret = Totp.newBase32Secret();
     byte[] key = Totp.decodeSecret(secret);
     enrollTotp(user, pw, secret);
-    String job = rule.createProject(AbstractProject.class, "it-trust-job").getFullName();
-    String preLogin = "/job/" + job + "/";
+    String job = rule.createProject(FreeStyleProject.class, "it-trust-job").getFullName();
+    String siteJob = "/job/" + job + "/";
     URL base = rule.getURL();
 
     // -- First browser: log in + verify (grants the trust record).
     JenkinsRule.WebClient first = rule.createWebClient();
     first.setJavaScriptEnabled(false);
     first.setThrowExceptionOnFailingStatusCode(false);
-    doPostLogin(first, base, user, pw);
-    HtmlPage page = mfaPage(first, base, preLogin);
+    first.login(user, pw);
+    HtmlPage page = mfaPage(first, base, siteJob);
     String crumb = crumbFromPage(page);
     JSONObject ok = postMfaForm(first, base, "postVerify", crumb,
-        new NameValuePair("code", Totp.codeAt(key, System.currentTimeMillis())),
-        new NameValuePair("redirect", preLogin));
+        new NameValuePair("code", Totp.codeAt(key, System.currentTimeMillis())));
     assertTrue(ok.optBoolean("ok"), "the first browser must verify (trust granted): " + ok);
 
     // -- Second browser: fresh everything; the persisted trust must carry
@@ -551,8 +573,8 @@ class MfaFilterIT {
     JenkinsRule.WebClient second = rule.createWebClient();
     second.setJavaScriptEnabled(false);
     second.setThrowExceptionOnFailingStatusCode(false);
-    doPostLogin(second, base, user, pw);
-    WebResponse got = rawGet(second, base, preLogin);
+    second.login(user, pw);
+    WebResponse got = rawGet(second, base, siteJob);
     assertEquals(200, got.getStatusCode(),
         "a fresh session for a trusted (remembered) user must reach the protected "
             + "path directly — trustedUntilMs governs future logins (or-branch): "
@@ -587,10 +609,10 @@ class MfaFilterIT {
    * dispatches — and if the MFA page or error page had a missing resource,
    * the chain 302 → 404 → 302 loops forever ("Too many redirects" in
    * {@code InjectedTest} is exactly that symptom). The decision-table half
-   * is unit-pinned in {@code FilterLogicTest#errorDispatchPassesAndOnlyThen};
-   * this is the boot-proof that a real error dispatch flows through it.
-   * The assertion is scoped to the safety property (no bounce to the MFA
-   * page); the exact 4xx status is a core concern, not ours.
+   * is unit-pinned in {@code FilterLogicTest}; this is the boot-proof that
+   * a real error dispatch flows through it. The assertion is scoped to the
+   * safety property (no bounce to the MFA page); the exact 4xx status is a
+   * core concern, not ours.
    */
   @Test
   void errorDispatchDoesNotLoopIntoTheGate(JenkinsRule rule) throws Exception {
@@ -599,24 +621,23 @@ class MfaFilterIT {
     String secret = Totp.newBase32Secret();
     byte[] key = Totp.decodeSecret(secret);
     enrollTotp(user, pw, secret);
-    rule.createProject(AbstractProject.class, "it-404-job");
-    String preLogin = "/job/it-404-job/";
+    rule.createProject(FreeStyleProject.class, "it-404-job");
+    String siteJob = "/job/it-404-job/";
     URL base = rule.getURL();
 
     JenkinsRule.WebClient c = rule.createWebClient();
     c.setJavaScriptEnabled(false);
     c.setThrowExceptionOnFailingStatusCode(false);
-    doPostLogin(c, base, user, pw);
-    HtmlPage page = mfaPage(c, base, preLogin);
+    c.login(user, pw);
+    HtmlPage page = mfaPage(c, base, siteJob);
     String crumb = crumbFromPage(page);
     JSONObject ok = postMfaForm(c, base, "postVerify", crumb,
-        new NameValuePair("code", Totp.codeAt(key, System.currentTimeMillis())),
-        new NameValuePair("redirect", preLogin));
+        new NameValuePair("code", Totp.codeAt(key, System.currentTimeMillis())));
     assertTrue(ok.optBoolean("ok"), "verify first so the request passes the gate: " + ok);
 
     // A sub-path with no view for this project: the core produces a 4xx
     // (sendError → ERROR dispatch on re-entry), not a normal response.
-    WebResponse resp = follow(c, base, "/job/it-404-job/no-such-action");
+    WebResponse resp = follow(c, base, siteJob + "no-such-action");
     String loc = resp.getResponseHeaderValue("Location");
     assertTrue(loc == null || !loc.contains("securityRealm/mfa"),
         "a core error dispatch must not be bounced into the gate (recursion guard): " + loc);
@@ -625,52 +646,98 @@ class MfaFilterIT {
   }
 
   // ==================================================================
-  // Helpers — pure glue, keep them small.
+  // Helpers — URL construction, enrollment, raw I/O, crumb.
   // ==================================================================
 
-  private record Url(URL abs, String raw) {}
+  // ---- URL construction (context-path preserving) -----------------
 
-  private URL resolve(URL base, String location) throws Exception {
-    if (location == null) {
-      return base;
-    }
-    if (location.startsWith("http://") || location.startsWith("https://")) {
-      return new URL(location);
-    }
-    String l = location;
-    if (l.startsWith("/")) {
-      l = l.substring(1);
-    }
-    // The Jenkins base includes the context path already.
+  /**
+   * Build a request URL under the booted base, preserving the context path.
+   * The harness runs Jenkins at {@code http://host:PORT/jenkins/}; a naive
+   * {@code new URL(base, "/x")} treats "/x" as path-absolute and drops the
+   * context, landing at the server root (a 404). We therefore strip the
+   * leading slash and <em>append</em> to a trailing-slash base.
+   */
+  private static URL href(URL base, String rel) throws Exception {
+    String r = rel.startsWith("/") ? rel.substring(1) : rel;
     String b = base.toString();
-    if (b.endsWith("/")) {
-      b = b.substring(0, b.length() - 1);
+    if (!b.endsWith("/")) {
+      b = b + "/";
     }
-    return new URL(b + (location.startsWith("/") ? location : "/" + location));
+    return new URL(b + r);
   }
 
-  /** Build a password-backed HPSR realm + FCOL strategy (idempotent). */
-  private void realmSetup() {
+  /**
+   * Resolve an already context-absolute location (as emitted in a 302
+   * {@code Location}) to an absolute URL, anchored at the host's authority —
+   * NOT under the base's context (which would duplicate it).
+   */
+  private static URL hostAbs(URL base, String ctxAbsolutePath) throws Exception {
+    String b = base.toString();
+    int slash = b.indexOf("/", b.indexOf("//") + 2);
+    String authority = (slash == -1) ? b : b.substring(0, slash);
+    String p = ctxAbsolutePath.startsWith("/") ? ctxAbsolutePath : "/" + ctxAbsolutePath;
+    return new URL(authority + p);
+  }
+
+  /** Context path of the booted base (e.g. "/jenkins"); "" for root deploy. */
+  private static String ctxOf(URL base) {
+    String b = base.toString();
+    int slash = b.indexOf("/", b.indexOf("//") + 2);
+    if (slash == -1) {
+      return "";
+    }
+    String rest = b.substring(slash);
+    if (rest.endsWith("/")) {
+      rest = rest.substring(0, rest.length() - 1);
+    }
+    return rest;
+  }
+
+  /** Context-absolute form of an in-site path (e.g. /jenkins/job/x/). */
+  private static String ctxAbs(String ctx, String sitePath) {
+    String p = sitePath.startsWith("/") ? sitePath : "/" + sitePath;
+    return (ctx.isEmpty() ? "" : ctx) + p;
+  }
+
+  /** The context root — the gate's no-carrier send-back target. */
+  private static String ctxRoot(String ctx) {
+    return (ctx.isEmpty()) ? "/" : ctx;
+  }
+
+  // ---- Enrollment (HPSR + per-user factor) ------------------------
+
+  /** Ensure an HPSR realm + FCOL strategy are in place (idempotent). */
+  private HudsonPrivateSecurityRealm ensureRealm() {
     Jenkins j = Jenkins.get();
-    if (!(j.getSecurityRealm() instanceof HudsonPrivateSecurityRealm)) {
-      j.setSecurityRealm(new HudsonPrivateSecurityRealm(false)); // no signup
-      j.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy());
+    if (j.getSecurityRealm() instanceof HudsonPrivateSecurityRealm realm) {
+      return realm;
     }
+    HudsonPrivateSecurityRealm realm = new HudsonPrivateSecurityRealm(false); // no signup
+    j.setSecurityRealm(realm);
+    j.setAuthorizationStrategy(new FullControlOnceLoggedInAuthorizationStrategy());
+    return realm;
   }
 
-  private void enrollTotp(String name, String pw, String secret) throws Exception {
-    realmSetup();
-    User u = User.get(name, true);
-    u.addProperty(Details.fromPlainPassword(pw));
+  /**
+   * Create a password-backed user in the live HPSR and enrol the TOTP factor.
+   * Enrolment goes through the realm's own {@code createAccount(login,
+   * password)} (core's admin-side account creation) because
+   * {@code Details.fromPlainPassword} is package-private and unreachable from
+   * this package (verified against jenkins-core 2.528.3). The result is a
+   * genuine HPSR password session — exactly what the live gate's
+   * {@code Jenkins.getAuthentication2()}-based user resolution keys off.
+   */
+  private User enrollTotp(String name, String pw, String secret) throws Exception {
+    User u = ensureRealm().createAccount(name, pw);
     MfaUserProperty p = MfaUserProperty.getOrCreate(u);
     p.setTotpSecret(Secret.fromString(secret));
     u.save();
+    return u;
   }
 
   private User enrollEmailAndReturn(String name, String pw, String mail) throws Exception {
-    realmSetup();
-    User u = User.get(name, true);
-    u.addProperty(Details.fromPlainPassword(pw));
+    User u = ensureRealm().createAccount(name, pw);
     MfaUserProperty p = MfaUserProperty.getOrCreate(u);
     p.setRegisteredEmail(mail);
     u.save();
@@ -681,27 +748,15 @@ class MfaFilterIT {
     enrollEmailAndReturn(name, pw, mail);
   }
 
-  /** POST the real /login form (j_username/j_password — the harness's own flow). */
-  private void doPostLogin(JenkinsRule.WebClient c, URL base, String user, String pw)
-      throws Exception {
-    WebRequest req = c.getWebConnection().getWebRequest(new URL(base, "/login"));
-    req.setMethod(HttpMethod.POST);
-    List<NameValuePair> params = new ArrayList<>();
-    params.add(new NameValuePair("j_username", user));
-    params.add(new NameValuePair("j_password", pw));
-    req.setRequestParameters(params);
-    // Core excludes the login endpoint from the crumb filter (the harness's
-    // own login() posts exactly these two fields and nothing else).
-    c.loadWebResponse(req); // no redirect following — the session cookie lands here
-  }
+  // ---- Raw I/O ---------------------------------------------------
 
-  /** A raw GET (no redirect-following) — the wire assertions live here. */
+  /** A raw GET (no redirect following) — the wire assertions live here. */
   private WebResponse rawGet(JenkinsRule.WebClient c, URL base, String path) throws Exception {
-    WebRequest req = c.getWebConnection().getWebRequest(new URL(base, path));
+    WebRequest req = new WebRequest(href(base, path));
     try {
       return c.loadWebResponse(req);
     } catch (FailingHttpStatusCodeException e) {
-      return e.getWebResponse();
+      return e.getResponse();
     }
   }
 
@@ -714,26 +769,33 @@ class MfaFilterIT {
     WebResponse resp = rawGet(c, base, path);
     for (int hops = 0; resp.getStatusCode() == 302 && hops++ < 5; ) {
       String loc = resp.getResponseHeaderValue("Location");
-      resp = rawGet(c, base, loc);
+      WebRequest req = new WebRequest(hostAbs(base, loc));
+      try {
+        resp = c.loadWebResponse(req);
+      } catch (FailingHttpStatusCodeException e) {
+        resp = e.getResponse();
+      }
     }
     return resp;
   }
 
   /** Navigate the client to the MFA gate-bounce page and return the HTML. */
-  private HtmlPage mfaPage(JenkinsRule.WebClient c, URL base, String preLogin) throws Exception {
-    WebResponse bounce = rawGet(c, base, preLogin);
+  private HtmlPage mfaPage(JenkinsRule.WebClient c, URL base, String path) throws Exception {
+    WebResponse bounce = rawGet(c, base, path);
     assertEquals(302, bounce.getStatusCode(),
         "the enrolled unverified user must be bounced (302) to the MFA page: "
             + bounce.getStatusCode());
     String loc = bounce.getResponseHeaderValue("Location");
     assertNotNull(loc, "the bounce must carry a Location header");
-    Url mfa = new Url(resolve(base, loc), loc);
-    return (HtmlPage) c.getPage(mfa.abs);
+    return (HtmlPage) c.getPage(hostAbs(base, loc));
   }
 
   /** The value of the MFA page's single hidden (crumb) input; remembers its name. */
   private String crumbFromPage(HtmlPage page) {
-    HtmlForm form = page.getFormByName("verifyForm");
+    // The MFA page declares the form by id, not name
+    // (index.jelly: <form id="verifyForm">) — HtmlUnit's name lookup would
+    // miss it and every case would die on a missing-form exception at boot.
+    HtmlForm form = (HtmlForm) page.getElementById("verifyForm");
     List<HtmlInput> hidden = new ArrayList<>();
     for (HtmlElement el : form.getFormElements()) {
       if (el instanceof HtmlInput in && "hidden".equalsIgnoreCase(in.getTypeAttribute())) {
@@ -754,9 +816,7 @@ class MfaFilterIT {
    */
   private JSONObject postMfaForm(JenkinsRule.WebClient c, URL base, String endpoint,
       String crumbValue, NameValuePair... fields) throws Exception {
-    WebRequest req = c.getWebConnection().getWebRequest(
-        new URL(base, "/securityRealm/mfa/" + endpoint));
-    req.setMethod(HttpMethod.POST);
+    WebRequest req = new WebRequest(href(base, "securityRealm/mfa/" + endpoint), HttpMethod.POST);
     List<NameValuePair> params = new ArrayList<>();
     params.add(new NameValuePair(this.crumbName, crumbValue));
     for (NameValuePair f : fields) {
@@ -767,12 +827,14 @@ class MfaFilterIT {
     try {
       resp = c.loadWebResponse(req);
     } catch (FailingHttpStatusCodeException e) {
-      resp = e.getWebResponse();
+      resp = e.getResponse();
     }
     assertEquals(200, resp.getStatusCode(),
         "the MFA endpoint must answer with its 200 JSON envelope: " + resp.getStatusCode());
     return JSONObject.fromObject(resp.getContentAsString());
   }
+
+  // ---- Small pure helpers ----------------------------------------
 
   private static String extractRedirectParam(String url) {
     Matcher m = Pattern.compile("redirect=([^&]+)").matcher(url);
@@ -785,7 +847,7 @@ class MfaFilterIT {
   private static String jsessionId(JenkinsRule.WebClient c) {
     for (Cookie cookie : c.getCookieManager().getCookies()) {
       if ("JSESSIONID".equals(cookie.getName())) {
-        return cookie.getCookieValue();
+        return cookie.getValue();
       }
     }
     return null;
