@@ -13,8 +13,10 @@ bedside reading.
 
 `devcru-mfa` (repo `/home/hunter/dev/devcru-jenkins-mfa`, branch
 **`develop`**, remote `github.com:unprofessional/devcru-jenkins-mfa.git`)
-is at **`19e8498`** (A21 landed 2026-08-19, this session — see note
-below the paragraph), pushed, CI-mirror green: Tasks 0–8 complete **plus
+is at **`19e8498`** (A21 landed 2026-08-19 — see note
+below the paragraph). HEAD may sit one or two docs-only commits ahead of that
+(this handoff's own update pass landed afterwards); **no code moved since
+`19e8498`**, pushed, CI-mirror green: Tasks 0–8 complete **plus
 A21**, the home-grown Bearer API-token authenticator
 (`BearerTokenFilter`, mads-ordered dependency of Task 9). The
 live MFA gate (`MfaFilter`), the login page + verify/resend endpoints
@@ -236,7 +238,7 @@ BDD-documented per AGENTS.md.
   `provided` transitive of jenkins-core; Jenkins does not run Spring's web
   filter chain — "built-in" is a mirage; full forensics in TECHNO_DEBT
   A15/A21 + plan AMENDMENTS). Implementation: a `jakarta.servlet.Filter`
-  registered ahead of the gate, parses `Authorization: *** caller
+  registered ahead of the gate, parses `Authorization: <api-token> caller
   identity from a companion header (tokens are opaque 40-hex, no embedded
   id — hence a documented client contract header, not an O(N) scan),
   checks `ApiTokenProperty.matchesPassword`, sets the api-token request
@@ -272,6 +274,21 @@ BDD-documented per AGENTS.md.
    grep the log for the surefire summary before reporting green; the exit
    code of a wrapper `echo` can mask it.
 6. **Redact all secrets/tokens in logs and chat** — `[REDACTED]`.
+7. **Access-modifier-checker (AMC) is a live gate for plugin→core calls**
+   (TECH_DEBT A21, LANDED 2026-08-19). `jakarta.*` and `org.springframework.*`
+   are on Jenkins's approved-list, but core-internal seams are NOT —
+   A21's first draft died on `jenkins.security.BasicApiTokenHelper` and
+   the `User.impersonate(UserDetails)` overload ("must not be used"),
+   caught only at `verify`. If a fresh Task 9 seam wants to call
+   something in `jenkins.security` / `hudson.security` internals, check
+   the approved public surface first (javap the core jar; A21's landed
+   idiom — `User.getById(id,false)`, `ApiTokenProperty.matchesPassword`,
+   the 0-arg `User.impersonate2()` — is the known-good shape).
+8. **Jenkins' HtmlUnit fork has no `WebRequest.addHeader`** (A21 IT,
+   2026-08-19): the harness shades its own copy and exposes
+   `setAdditionalHeader(String, String)` instead. `mvn test`/`verify`
+   will compile-complain "cannot find symbol: addHeader" — use
+   `setAdditionalHeader` when driving raw `WebRequest`s inside the IT.
 
 ## 8. Read these first (in this order, before touching code)
 
@@ -279,8 +296,9 @@ BDD-documented per AGENTS.md.
 2. `AGENTS.md` — the rules.
 3. `docs/plans/2026-08-17-jenkins-mfa-plugin.md` — the AMENDMENTS block at
    the top, then **Task 9's section** (corrected 2026-08-19), then Task 10.
-4. `docs/todo/TECH_DEBT.md` — A15 (ruling), A21 (spec), A16–A20 (what
-   Task 8's IT caught, with failure signatures).
+4. `docs/todo/TECH_DEBT.md` — A15 (ruling), A21 (**LANDED** 2026-08-19 —
+   landed design note + the AMC constraint are in that entry), A16–A20
+   (what Task 8's IT caught, with failure signatures).
 5. `docs/done/2026-08-18-task8-handoff.md` — the IT mechanics + defects
    forensics (the "economics correction" and the five defects are told
    there better than anywhere else).

@@ -9,7 +9,7 @@
 >    stands.
 > 2. **A15 resolution (mads, 2026-08-19):** the Bearer case is a real gap,
 >    not a core-bet — implement a home-grown Bearer→API-token filter (read
->    `Authorization: *** match against `ApiTokenProperty`, set the
+>    `Authorization: <api-token> match against `ApiTokenProperty`, set the
 >    api-token request attribute the gate already exempts) rather than
 >    voiding the plan line or waiting on core. Tracked as its own small
 >    task; no new dependency (Spring Security is `provided`/transitive and
@@ -597,7 +597,7 @@ Decision chain (exact order):
 **Test cases (3):**
 1. **totp_flow:** create user, set `MfaUserProperty` TOTP secret; Jenkins rule; `POST /j_acegi_securityCheck` with credentials → 302 to `/securityRealm/mfa`; POST `postVerify` with correct `Totp.codeAt(key, now)` → redirect to `/` (assert **not** to a dead path); subsequent `GET /` with same session cookie → 200 (trusted); fresh session → 302 (untrusted).
 2. **email_flow:** enable email factor with `CaptureEmailSender`; `postResendEmail` captures code; `postVerify` with captured code → trusted.
-3. **api_token_exempt:** `Authorization: Basic <user>:*** against a protected endpoint (`/api/json`) → 200 **without** MFA.
+3. **api_token_exempt:** `Authorization: Basic <user>:<api-token> against a protected endpoint (`/api/json`) → 200 **without** MFA.
    *(Note, 2026-08-19: the original text here sketched `Bearer <api-token>` — that case is the
    A21 sibling `MfaFilterIT#bearerTokenExemptFromGate`,
    LANDED 2026-08-19 (`BearerTokenFilter`, see TECH_DEBT A21), NOT a Task 8/9 deliverable.
