@@ -60,7 +60,8 @@ architecture & design-decision record used to audit the code.
 | [`docs/architecture/`](docs/architecture/README.md) | Architecture & design-decision record (abstractions, state-management boundaries, Jenkins integration surface, auth/security seams). The audit companion. |
 | [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A21, with status/owner per item). Rulings from mads: 2026-08-18 (`current()` is authoritative — A1; both minting paths for `emailCodeSecret` — A2; `?redirect=` canonical over `Referer` — A3; Task 9 consumes-and-resets the telemetry fields — A7/A8) and 2026-08-19 (mount move `securityRealm/mfa` → `mfa` — A17; Bearer to be implemented home-grown, no dependency — A15, tracked as A21). Task 8 also added the booted-IT defects A16 (getServletPath 302 loop), A17 (realm mount collision), A18 (`<x:out>` render 500), A19 (IT `rawGet` followed redirects), A20 (endpoints had no dispatch token). |
 | [`docs/done/2026-08-18-task8-handoff.md`](docs/done/2026-08-18-task8-handoff.md) | Landed Task 8's handoff note (end-to-end IT of the live gate): the two production defects it caught (A16 the getServletPath 302 self-loop, A17 the HPSR `securityRealm/mfa` mount collision — ruled 2026-08-19 to move to `/mfa`), the verified IT mechanics (context path, `c.login`, HPSR enrolment, form-by-id, JSON envelopes), the economics correction (~5 s per case, not minutes), and the A5/A15 corrections — moved to `done/` when Task 8 landed. |
-| [`docs/todo/2026-08-19-task9-handoff.md`](docs/todo/2026-08-19-task9-handoff.md) | **Written 2026-08-19 for a wiped-context handoff before Task 9:** everything a fresh reader needs to execute Task 9 (user-facing factor management on *Manage account → Security*) — the verified state of every class the task touches, the IT mechanics to extend, the six-endpoint contract, the **view-path correction** (`MfaUserProperty/config.jelly`, not `views/MfaUserProperty.jelly` — a wrong path fails *silently*), the no-nested-`f:form` rule, the single-POST enroll commit, the `@WebMethod`-per-endpoint rule (A20), the A2 single mint seam, the A15/A21 ruling and its spec, recurring pitfalls, and the read-first list. Read this first when starting Task 9. |
+| [`docs/todo/2026-08-19-task10-handoff.md`](docs/todo/2026-08-19-task10-handoff.md) | **Written 2026-08-19 for a wiped-context handoff at the Task 9 landing (Task 10 deploys next):** the full Task 9 landing record (six endpoints + section inventory, the A2/A7/A8 landings, the **A22 admin-gate deviation**, the four IT cases, the trap catalogue — silent view path, no-crumb-on-the-security-page, gate-bounces-the-tab, descriptor-vs-instance, empty-property-on-render, SpotBugs `REC_CATCH_EXCEPTION`) and the Task 10 cutover runbook (stage on `hpi:run`, snapshot/checksum discipline, upload order, the one live-box check that covers 2.528→2.577 include drift). Read this first for anything Task 9/10-related. |
+| [`docs/done/2026-08-19-task9-handoff.md`](docs/done/2026-08-19-task9-handoff.md) | Task 9 PREP handoff (superseded for current state by the Task 10 handoff above; its IT-mechanics forensics remain historically accurate) — moved to `done/` when Task 9 landed 2026-08-19. |
 
 
 ## Practical usage — what end users should expect
@@ -68,35 +69,59 @@ architecture & design-decision record used to audit the code.
 > The TOTP engine, per-user state, the email-code factor (generation,
 > hashing, single-use, expiry, resend, and auto-provisioned per-user HMAC
 > key), the two gate brains, the admin settings, the MFA login screen
-> with its verify/resend endpoints, and the automatic login gate (Task 7)
-> that enforces all of it on a live install are implemented and tested;
-> mail codes are delivered through the standard Jenkins Mailer (global SMTP
-> config) once that plugin — preinstalled on any real instance — is present.
-> The gate is real and is verified end to end on a booted Jenkins (Task 8's
-> IT): on a live instance an enrolled user is bounced to the MFA page after
-> their password login until the second factor is proven, and the whole wire
-> — password login, the 302, the MFA page, the verify/resend POSTs, the
-> mail round trip to the registered mailbox, the session rotation, and the
-> "back to where you were" round trip — is asserted green, while API tokens,
-> exempt service accounts, and unenrolled users are unaffected, and the kill
-> switch is a setting, not an uninstall. Only the self-service
-> enrollment/management UI (Task 9) is not a shipped screen yet — a user who
-> has no factors enrolled cannot lock themselves in or out
-> (there is nothing to gate them with), and the flow described below is the
-> committed behaviour contract end to end.
+> with its verify/resend endpoints, the user-facing factor-management
+> screen (Task 9: enroll, re-enroll, and disable factors + revoke
+> browser trust from *Manage account → Security*), and the automatic
+> login gate (Task 7) that enforces all of it on a live install are
+> implemented and tested; mail codes are delivered through the standard
+> Jenkins Mailer (global SMTP config) once that plugin — preinstalled on
+> any real instance — is present. Task 9's screen and endpoints are
+> verified end to end against a booted Jenkins (render, scan-and-confirm
+> enrolling a phone, a wrong-code confirm that leaves the working factor
+> untouched, disable/revoke, and every endpoint routing). The remaining
+> known edge is *who can open that screen on a given install* (the
+> security tab is core's admin-facing page — see "Enrolling your factors"
+> below), and the one thing not built is live cutover to the production
+> box (Task 10).
 
 ### Enrolling
 
-- **TOTP:** the user scans a QR (or manually enters the 20-character secret)
-  into *any* RFC 6238 authenticator — Google Authenticator, Authy, 1Password.
-  No specific app, cloud account, or subscription is required.
-- **Email codes:** the user registers one mailbox; no authenticator app
+- **Where:** the MFA section on *Manage account → Security* (for the person
+  whose account you manage). **TOTP:** hit *New TOTP factor* — a QR code and
+  a 20-character manual secret appear in the page; scan (or type) into
+  *any* RFC 6238 authenticator — Google Authenticator, Authy, 1Password —
+  then enter the 6-digit code the app shows and confirm. **Email codes:**
+  register one mailbox on that same section (*Enable email codes* sends a
+  test code, *Test the mailbox* re-issues one); no authenticator app
   needed. Codes are 8 characters from an unambiguous alphabet (no `0`/`O`,
   no `1`/`I`), so a code read off a phone at a busy desk is a code that
   verifies. Codes are single-use and valid for 5 minutes; a resend is
   available, throttled to one per minute.
+- **A wrong confirm is safe.** Enrolling (or re-enrolling a second phone)
+  commits the new factor **only** when the presented code actually
+  verifies. Typing a code that doesn't match the freshly-generated secret
+  fails cleanly and leaves the previously-working factor untouched —
+  nobody locks themselves out by mistyping their second phone.
 - **At least one factor is required once enrolled; having both is allowed.** A
   TOTP-only user and an email-only user get identical gate protection.
+- **Removing a factor:** the same section offers *Disable TOTP* and
+  *Disable email codes* (disabling email also retires its per-user key, so a
+  re-enrolled account starts clean) and *Revoke this device's trust*
+  (sign everyone else out again; the current session ends the trust itself).
+  An admin clearing someone's factors entirely for a full lockout is the
+  documented recovery path — there is no self-service "reset everything",
+  by design.
+- **Who can open that section on a given install:** it is the core-security
+  tab, which core renders only to holders of the *Overall/Administer*
+  permission. On this project's target setup (a single admin, `mads`) that
+  means exactly one person can open it — which is the intended shape: the
+  plugin is not built to be a self-serve portal for hundreds of strangers.
+  The section's endpoints act only on the *currently-logged-in* user, so a
+  button can never be pointed at someone else's profile (see the A22 note
+  in `docs/todo/TECH_DEBT.md` for the boundary and the deliberate
+  non-goals). If a later need appears for an admin managing *other*
+  accounts' factors, that is a small, documented follow-up — it has not
+  been built.
 
 ### Day-to-day login
 
