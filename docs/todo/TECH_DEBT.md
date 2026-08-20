@@ -177,6 +177,50 @@ every property carries `0` (implies TOTP) even for email-only users.
 
 ## OPEN — no ruling yet
 
+### A23 — CRITICAL (external review): gate allow-list passes all six management endpoints to password-only sessions
+**Status: OPEN — fix is mads-directed and URGENT; owner: `docs/todo/
+2026-08-20-URGENT-authz-fix-handoff.md`. Task 10 (deploy) is BLOCKED on it.**
+
+Found by Moldy's external security review (2026-08-19; full record in
+Moldy's workspace `reviews/jenkins-mfa/REVIEW-2026-08-19.md`).
+`ALLOWED_PREFIXES` carries the bare `"/mfa"` prefix with `startsWith`
+matching (MfaFilter.java:130–137, :349–363) — required for `postVerify`,
+but it also passes all six Task 9 management endpoints to sessions that
+only proved a PASSWORD. `/crumbIssuer` is allow-listed too, so crumbs are
+obtainable pre-verify.
+
+**Two attack variants, one root cause:**
+1. **Factor stripping (two requests):** password-only attacker POSTs
+   `postDisableTotp` + `postDisableEmail` → both factors wiped →
+   `isMfaEnabled()` false → gate passes → full access. Defeats MFA
+   entirely against its own threat model; contradicts the README's "no
+   self-service reset, by design".
+2. **Seed-swap brute force:** `postEnrollConfirm` pre-verify +
+   unthrottled (RateLimiter guards only `postVerify`) → attacker commits
+   their own seed on a guessed code (~333K tries expected, ≈1h at 100
+   req/s) → persistent access, victim's authenticator silently dead.
+
+**The audit's own artifacts pin the hole:** `postDisableTotp`'s javadoc
+claims gated-unverified sessions "cannot reach these endpoints at all"
+(false), and `MfaProfileIT.allSixProfileEndpointsAreRoutedNot404` POSTs
+all six from a gated-unverified session and asserts 200.
+
+**Fix shape (spec'd in the urgent handoff):** pure seam
+`managementAllowed(prop, sessionVerified, trustLive)`; 403 when
+`enrolled && !sessionVerified(VERIFIED_ATTR) && !trustLive`; unenrolled
+users keep enrollment access; trusted-device sessions keep management
+access (trust was granted by a prior successful verify). Red→green: the
+attack-chain IT must be written first and fail. Same commit: fix the
+false javadoc, resolve this entry, stamp + archive the urgent handoff.
+
+**Minor findings from the same review (NOT part of A23 — mads rules
+separately):** `setTotpWindow` unclamped (negative = TOTP lockout);
+`totpSecret` `@DataBoundSetter` lets configSubmit bind a seed (admin-only
+path; removal recommended in the urgent handoff as one-line hardening);
+RateLimiter "fresh burst" javadoc inaccurate (safer than documented);
+EmailCodeIssuer EXPIRED comment/code discrepancy; `registeredEmail`
+binds without mailbox verification.
+
 ### A5 — "Back to where you were" resolves to the MFA page, not the pre-login page
 **Status: RESOLVED (Task 8 — the IT assertion landed green).** **Owner: Task 7 (plumbing) + Task 8 (IT assertion).**
 
