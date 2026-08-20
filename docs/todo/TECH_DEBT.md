@@ -215,11 +215,11 @@ false javadoc, resolve this entry, stamp + archive the urgent handoff.
 
 **Minor findings from the same review (NOT part of A23 — mads rules
 separately):** `setTotpWindow` unclamped (negative = TOTP lockout);
-`totpSecret` `@DataBoundSetter` lets configSubmit bind a seed (admin-only
-path; removal recommended in the urgent handoff as one-line hardening);
 RateLimiter "fresh burst" javadoc inaccurate (safer than documented);
 EmailCodeIssuer EXPIRED comment/code discrepancy; `registeredEmail`
-binds without mailbox verification.
+binds without mailbox verification. **Ruling recorded (mads, 2026-08-20):**
+the `totpSecret` `@DataBoundSetter` removal is MANDATORY in the A23 fix
+commit (moved into the urgent handoff's required scope).
 
 ### A5 — "Back to where you were" resolves to the MFA page, not the pre-login page
 **Status: RESOLVED (Task 8 — the IT assertion landed green).** **Owner: Task 7 (plumbing) + Task 8 (IT assertion).**

@@ -111,11 +111,12 @@ Implementation notes:
   same commit — document the actual guard.
 - `postVerify` and `postResendEmail` stay reachable pre-verify (that is the
   point of the allow-list). Do not touch them.
-- **Optional same-commit hardening (recommended, one line):** remove the
+- **Mandatory same-commit hardening (mads ruled 2026-08-20):** remove the
   `@DataBoundSetter` from `MfaUserProperty.setTotpSecret` so `configSubmit`
   can never bind a seed — restores the documented invariant "the seed is
   committed only via `postEnrollConfirm`" (the config.jelly form does not
-  bind it; nothing legitimate is lost).
+  bind it; nothing legitimate is lost). This is part of the fix, not
+  optional.
 
 ## 4. Test contract (red→green, house rule)
 
@@ -149,6 +150,7 @@ Code + tests + docs land together. In the fixing commit, also update:
 Minor findings from the same review — real, but not part of this fix;
 mads rules on them separately:
 
+
 - `setTotpWindow` has no clamp (negative value = total TOTP lockout;
   admin footgun, admin-only surface).
 - `RateLimiter` javadoc "fresh burst after lockout expiry" is inaccurate
@@ -160,12 +162,14 @@ mads rules on them separately:
 ## 7. Definition of done
 
 1. Guard seam implemented + unit-pinned; all six endpoints guarded.
-2. Attack-chain IT green (was red first — honest red→green in the commit
+2. `MfaUserProperty.setTotpSecret` carries NO `@DataBoundSetter`
+   (mads-mandated, 2026-08-20).
+3. Attack-chain IT green (was red first — honest red→green in the commit
    message, house rule).
-3. `mvn -o -B -ntp clean verify` fully green, SpotBugs 0.
-4. False javadoc fixed; TECH_DEBT A23 resolved; this handoff stamped and
+4. `mvn -o -B -ntp clean verify` fully green, SpotBugs 0.
+5. False javadoc fixed; TECH_DEBT A23 resolved; this handoff stamped and
    moved to `docs/done/`.
-5. **Then** — and only then — pick up
+6. **Then** — and only then — pick up
    `docs/todo/2026-08-19-task10-handoff-BLOCKED.md` for the deploy.
 
 ---
