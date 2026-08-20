@@ -202,6 +202,7 @@
             resend_cooldown: "Please wait a moment before requesting another code.",
             not_enrolled: "That factor is not enabled on this account.",
             not_authenticated: "Your session looks off — reload the page and try again.",
+            verification_required: "This action needs a freshly verified sign-in: complete the one-time code step first, then reload this page.",
             server_error: "Something went wrong on the server. Try again."
           };
 

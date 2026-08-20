@@ -323,6 +323,85 @@ class MfaProfileSeamTest {
         "the enrolled seed survives a failed confirm of a different seed");
   }
 
+  // =====================================================================
+  // A23 — the management-authorization seam (pure; all four quadrants)
+  // =====================================================================
+
+  /**
+   * WHAT: the A23 authorization decision for the six factor-management
+   * endpoints, pinned as pure booleans across all four quadrants of
+   * (enrolled × verified × trust). (TECH_DEBT A23, external review
+   * 2026-08-19; the wire-level attack chain is pinned by MfaProfileIT case
+   * e — this is the unit-level pin of the decision itself, so a refactor
+   * cannot move a clause without a red here.)
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN the three inputs to MfaController.managementAllowed
+   * WHEN  enrolled=false (no factor at all, any session shape)
+   * THEN  ALLOW — unenrolled users are passed by the gate and must keep
+   *       self-enrolment access (their sessions never carry VERIFIED_ATTR,
+   *       so requiring the flag would lock every fresh user out of the
+   *       enrolment UI)
+   * WHEN  enrolled + verified-this-session
+   * THEN  ALLOW (the natural self-service flow: login → verify → manage) —
+   *       regardless of trust state
+   * WHEN  enrolled + verified-this-session + live trust
+   * THEN  ALLOW (both instruments present; the OR is idempotent)
+   * WHEN  enrolled + unverified + no live trust
+   * THEN  DENY — the password-only attacker's exact state: the flag is set
+   *       only by a postVerify success, trust only granted by a prior
+   *       successful verify, and the attacker has neither
+   * WHEN  enrolled + unverified + LIVE trust
+   * THEN  ALLOW — a remembered-device login already proved a factor within
+   *       the trust window; without this clause the guard breaks the
+   *       legitimate disable/re-enrol flow from a remembered browser
+   * </pre>
+   *
+   * <p>WHY/SOLVES: the gate's {@code /mfa} allow-list (needed for
+   * postVerify) passes all six management endpoints to a pre-verify
+   * session, so the gate is NOT the protection these endpoints rely on —
+   * this decision is. Pinning all four quadrants (not just the deny) is
+   * what keeps the fix from over-correcting into a self-inflicted lockout
+   * of fresh users (unenrolled) or of trusted-device sessions. The
+   * contract constant the deny answers with (verification_required) is
+   * pinned in the same test below, and the stable 403 JSON shape is pinned
+   * by the IT's wire assertions.
+   */
+  @Test
+  void managementAuthorizationAllFourQuadrants() {
+    // Unenrolled: always allow, regardless of session shape (fresh users
+    // must keep self-enrolment; their sessions never carry the flag).
+    assertTrue(MfaController.managementAllowed(false, false, false),
+        "a fresh user must keep enrolment access (no flag, no trust)");
+    assertTrue(MfaController.managementAllowed(false, true, false),
+        "an unenrolled+verified session (e.g. right after a gate pass) may also manage");
+
+    // Enrolled + verified this session: allow, with or without trust.
+    assertTrue(MfaController.managementAllowed(true, true, false),
+        "enrolled + verified-this-session → allow (the natural self-service flow)");
+    assertTrue(MfaController.managementAllowed(true, true, true),
+        "enrolled + verified + trust → allow (both instruments, OR is idempotent)");
+
+    // Enrolled + unverified + no trust: DENY — the password-only attacker.
+    assertFalse(MfaController.managementAllowed(true, false, false),
+        "enrolled + unverified + no trust → deny (the A23 attack shape: the "
+            + "password holder alone must not manage factors)");
+
+    // Enrolled + unverified but live trust: allow — a remembered-device
+    // login already proved a factor within the window.
+    assertTrue(MfaController.managementAllowed(true, false, true),
+        "enrolled + unverified + live remembered trust → allow (a trusted "
+            + "device login already proved a factor; denying would break the "
+            + "legitimate disable/re-enrol flow from a remembered browser)");
+
+    // The stable error reason the deny answers with: the UI maps it to a
+    // user-visible "complete verification first" message (config.jelly's
+    // MESSAGES table), so the constant is part of the wire contract.
+    assertEquals("verification_required", VerifyOutcome.ERR_VERIFICATION_REQUIRED,
+        "the deny's stable error code is the UI-facing wire contract");
+  }
+
   // ---- helper: decode a PNG back to its QR payload with zxing (the
   //      independent read-back the round-trip test needs). A 300x300 QR
   //      with version ~5-6 decodes cleanly with no special hints.

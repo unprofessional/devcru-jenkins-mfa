@@ -35,6 +35,13 @@ public final class VerifyOutcome {
   public static final String ERR_EMAIL_NOT_ENROLLED = "email_not_enrolled";
   public static final String ERR_NOT_ENROLLED = "not_enrolled";
   public static final String ERR_NOT_AUTHENTICATED = "not_authenticated";
+  /**
+   * A23 (2026-08-20): the six factor-management endpoints deny a session that
+   * has not proven a second factor — enrolled, but neither verified this
+   * session nor holding live remembered trust. The stable reason the 403
+   * carries; the UI maps it to "complete verification first."
+   */
+  public static final String ERR_VERIFICATION_REQUIRED = "verification_required";
   public static final String ERR_SERVER = "server_error";
 
   private final boolean ok;

@@ -58,9 +58,10 @@ architecture & design-decision record used to audit the code.
 | [`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md) | The master implementation plan: tasks 0–10, the security-model decisions (mads-signed), and the per-task acceptance criteria. Read this before touching any task. |
 | [`docs/done/2026-08-18-task7-handoff.md`](docs/done/2026-08-18-task7-handoff.md) | Landed Task 7's handoff note (gate filter): the re-verified 2.528.3-core API findings (incl. three corrections to the plan sketch — no `JenkinsUtil`, `jenkins.security.*` package, jakarta-only filter), the seams it used, the execution order, and the two registration deviations it turned into (`EXTENSIONS_AUGMENTED` not `STARTED`; plain `@Extension` not `hudson.Plugin`) — moved to `done/` when Task 7 landed. |
 | [`docs/architecture/`](docs/architecture/README.md) | Architecture & design-decision record (abstractions, state-management boundaries, Jenkins integration surface, auth/security seams). The audit companion. |
-| [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A21, with status/owner per item). Rulings from mads: 2026-08-18 (`current()` is authoritative — A1; both minting paths for `emailCodeSecret` — A2; `?redirect=` canonical over `Referer` — A3; Task 9 consumes-and-resets the telemetry fields — A7/A8) and 2026-08-19 (mount move `securityRealm/mfa` → `mfa` — A17; Bearer to be implemented home-grown, no dependency — A15, tracked as A21). Task 8 also added the booted-IT defects A16 (getServletPath 302 loop), A17 (realm mount collision), A18 (`<x:out>` render 500), A19 (IT `rawGet` followed redirects), A20 (endpoints had no dispatch token). |
+| [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A23, with status/owner per item). Rulings from mads: 2026-08-18 (`current()` is authoritative — A1; both minting paths for `emailCodeSecret` — A2; `?redirect=` canonical over `Referer` — A3; Task 9 consumes-and-resets the telemetry fields — A7/A8) and 2026-08-19 (mount move `securityRealm/mfa` → `mfa` — A17; Bearer to be implemented home-grown, no dependency — A15, tracked as A21). Task 8 also added the booted-IT defects A16 (getServletPath 302 loop), A17 (realm mount collision), A18 (`<x:out>` render 500), A19 (IT `rawGet` followed redirects), A20 (endpoints had no dispatch token). **A23 (2026-08-20) landed and resolved** (management-endpoint authorization hole — see the urgent handoff below). |
+| [`docs/done/2026-08-20-URGENT-authz-fix-handoff.md`](docs/done/2026-08-20-URGENT-authz-fix-handoff.md) | **The A23 authorization fix** (found by the 2026-08-19 review): the gate's bare `/mfa` allow-list prefix let a password-only, not-yet-verified session reach all six factor-management endpoints — two POSTs could wipe both factors. LANDED 2026-08-20: pure `managementAllowed` seam + deny-before-mutation glue on all six endpoints (403 `verification_required`), honest red→green attack-chain IT, `setTotpSecret` de-bound from the profile form, TECH_DEBT A23 resolved — stamped and moved to `done/` when it landed. |
 | [`docs/done/2026-08-18-task8-handoff.md`](docs/done/2026-08-18-task8-handoff.md) | Landed Task 8's handoff note (end-to-end IT of the live gate): the two production defects it caught (A16 the getServletPath 302 self-loop, A17 the HPSR `securityRealm/mfa` mount collision — ruled 2026-08-19 to move to `/mfa`), the verified IT mechanics (context path, `c.login`, HPSR enrolment, form-by-id, JSON envelopes), the economics correction (~5 s per case, not minutes), and the A5/A15 corrections — moved to `done/` when Task 8 landed. |
-| [`docs/todo/2026-08-19-task10-handoff.md`](docs/todo/2026-08-19-task10-handoff.md) | **Written 2026-08-19 for a wiped-context handoff at the Task 9 landing (Task 10 deploys next):** the full Task 9 landing record (six endpoints + section inventory, the A2/A7/A8 landings, the **A22 admin-gate deviation**, the four IT cases, the trap catalogue — silent view path, no-crumb-on-the-security-page, gate-bounces-the-tab, descriptor-vs-instance, empty-property-on-render, SpotBugs `REC_CATCH_EXCEPTION`) and the Task 10 cutover runbook (stage on `hpi:run`, snapshot/checksum discipline, upload order, the one live-box check that covers 2.528→2.577 include drift). Read this first for anything Task 9/10-related. |
+| [`docs/todo/2026-08-19-task10-handoff.md`](docs/todo/2026-08-19-task10-handoff.md) | **Written 2026-08-19 for a wiped-context handoff at the Task 9 landing (Task 10 deploys next):** the full Task 9 landing record (six endpoints + section inventory, the A2/A7/A8 landings, the **A22 admin-gate deviation**, the four IT cases, the trap catalogue — silent view path, no-crumb-on-the-security-page, gate-bounces-the-tab, descriptor-vs-instance, empty-property-on-render, SpotBugs `REC_CATCH_EXCEPTION`) and the Task 10 cutover runbook (stage on `hpi:run`, snapshot/checksum discipline, upload order, the one live-box check that covers 2.528→2.577 include drift). **Unblocked 2026-08-20** — the A23 fix above landed before deploy could proceed. Read this first for anything Task 9/10-related. |
 | [`docs/done/2026-08-19-task9-handoff.md`](docs/done/2026-08-19-task9-handoff.md) | Task 9 PREP handoff (superseded for current state by the Task 10 handoff above; its IT-mechanics forensics remain historically accurate) — moved to `done/` when Task 9 landed 2026-08-19. |
 
 
@@ -213,10 +214,29 @@ architecture & design-decision record used to audit the code.
   counters, and pending-code state are server-managed; they are
   deliberately *not* bindable from the user's security-profile form. A
   crafted profile submit cannot grant itself a 30-day trust, zero out a
-  lockout streak, or submit a crafted pending code.
+  lockout streak, or submit a crafted pending code. The TOTP seed is not
+  bindable either: the enrolment/confirm endpoint is its only writer, so a
+  crafted profile submit cannot pin a factor the submitter cannot prove.
+- **Self-service factor management needs a *freshly proven* factor (A23).**
+  The six factor-management endpoints (generate/confirm enrolment, disable
+  TOTP or email, test-code, revoke trust) each answer **403
+  `verification_required`** unless the session has *just* proven a factor
+  this login **or** holds a live remembered-device trust. This closes the
+  gate's own `/mfa` allow-list hole (a password-only, not-yet-verified
+  session could previously reach the management endpoints and, with two
+  POSTs, wipe both factors — defeating MFA against the exact password-
+  compromise threat it exists for). Only the two *verify* endpoints
+  (`postVerify`/`postResendEmail`) stay reachable pre-verify, which is what
+  the allow-list is for. A verified or trusted session — i.e. one that has
+  already proven a second factor — manages its own factors as before; so
+  does a not-yet-enrolled user (they are passed by the gate and must keep
+  self-enrolment access).
 - **Lost everything (lost phone and mailbox).** Documented admin recovery
   path clears the user's stored factor state; the user re-enrolls. No
-  self-service reset, by design.
+  self-service reset, by design — now *enforced*: a session that has not
+  freshly proven a factor (or holds live trust) gets a 403 from every
+  factor-management endpoint, so "reset everything" by password alone is
+  impossible.
 - **Every knob an admin touches is clamped, not trusted.** The settings
   page enforces floors at save time: the trust floor can never be stored
   below 24 h even if a lower number is typed in, and tuning knobs (window,

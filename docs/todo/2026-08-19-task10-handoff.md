@@ -1,14 +1,16 @@
-# ⛔ BLOCKED — Task 10 handoff (do NOT start until the urgent fix lands)
+# ✅ UNBLOCKED — Task 10 kickoff (deploy to `jenkins.devcru.org`)
 
-> **STATUS: BLOCKED (2026-08-20).** An external security review (Moldy,
-> mads-directed) found a **critical authorization flaw** in the Task 9
-> surface — the gate's `/mfa` allow-list exposes all six management
-> endpoints to password-only sessions (audit item **A23**).
-> **DO NOT START TASK 10. DO NOT DEPLOY.** Do `docs/todo/
-> 2026-08-20-URGENT-authz-fix-handoff.md` first — findings, exact fix
-> shape, and the red→green test contract are all in there. This doc stays
-> the Task 10 (deploy) kickoff and is accurate again once the urgent
-> handoff is stamped LANDED and moved to `docs/done/`.
+> **STATUS: UNBLOCKED (2026-08-20 — A23 landed green, this commit).**
+> The external security review's critical finding (**A23** — the gate's
+> `/mfa` allow-list exposed all six management endpoints to password-only
+> sessions) is **fixed, red→green, and documented**: the fix landed
+> together with an honest red (`MfaProfileIT`'s new attack-chain IT ran
+> red on all six endpoints first), the four-quadrants unit pin, the mads-
+> mandated `setTotpSecret` `@DataBoundSetter` removal, the full green gate
+> (96/96, SpotBugs 0), and the same-commit docs (TECH_DEBT A23 → RESOLVED,
+> README, the urgent handoff stamped LANDED and moved to `docs/done/`).
+> **Task 10 may proceed** per the cutover runbook below. The `-BLOCKED`
+> suffix was dropped from this file's name in the same commit.
 
 **Written 2026-08-19, by Sebastian, at mads's direction (session reset
 immediately follows).** Everything below is verified state as of this
@@ -29,15 +31,15 @@ therefore (a) a pointer to the Task 9 landing record (§3 — full record in
 
 `devcru-mfa` (repo `/home/hunter/dev/devcru-jenkins-mfa`, branch
 **`develop`**, remote `github.com:unprofessional/devcru-jenkins-mfa.git`)
-at `2f150e0` (Task 9 landed, pushed, CI-green). **Tasks 0–9 are
-complete**, but **Task 10 is BLOCKED**: Moldy's 2026-08-19 external
-review found a critical authorization flaw in the Task 9 surface (A23 —
-gate allow-list exposes the six management endpoints to password-only
-sessions). **The urgent handoff (`docs/todo/
-2026-08-20-URGENT-authz-fix-handoff.md`) must land green before anything
-below is executed.** Build state at Task 9 landing: `mvn -o -B -ntp clean
-verify` BUILD SUCCESS — 94/94 tests, SpotBugs 0 bugs, `.hpi` produced; CI
-mirrors `mvn clean verify` on push.
+at `2f150e0` (Task 9 landed, pushed, CI-green) plus the A23 fix in this
+commit. **Tasks 0–9 are complete and Task 10 is UNBLOCKED (2026-08-20):**
+Moldy's 2026-08-19 external review found a critical authorization flaw in
+the Task 9 surface (A23 — gate allow-list exposes the six management
+endpoints to password-only sessions); the fix landed green with honest
+red→green in `<this commit>` (urgent handoff now at `docs/done/
+2026-08-20-URGENT-authz-fix-handoff.md`). Build state at A23 landing:
+`mvn -o -B -ntp clean verify` BUILD SUCCESS — 96/96 tests, SpotBugs 0
+bugs, `.hpi` produced; CI mirrors `mvn clean verify` on push.
 
 ## 2. Operating environment (exact commands)
 
