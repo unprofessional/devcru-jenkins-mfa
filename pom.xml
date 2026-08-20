@@ -51,6 +51,15 @@
       <artifactId>core</artifactId>
       <version>${zxing.version}</version>
     </dependency>
+    <!-- QR render (Task 9): MatrixToImageWriter + the j2se LuminanceSource
+         live in the 'javase' artifact, not 'core'. Paired with com.google.zxing:core
+         above at the same managed version; renders the enrolment QR to PNG.
+         Shipped in the .hpi (compile scope) exactly like core. -->
+    <dependency>
+      <groupId>com.google.zxing</groupId>
+      <artifactId>javase</artifactId>
+      <version>${zxing.version}</version>
+    </dependency>
     <!-- Email one-time-code delivery: hudson.tasks.Mailer (SMTP session + SMTP
          config) + jakarta.mail. Version managed by the bom-2.528.x BOM import
          above. This is the standard Jenkins Mailer plugin — pre-installed on any

@@ -5,9 +5,11 @@ import hudson.model.User;
 import hudson.model.UserProperty;
 import hudson.model.UserPropertyDescriptor;
 import hudson.model.userproperty.UserPropertyCategory;
+import hudson.security.csrf.CrumbIssuer;
 import hudson.util.Secret;
 import java.io.IOException;
 import org.kohsuke.stapler.DataBoundSetter;
+import org.kohsuke.stapler.StaplerRequest2;
 
 /**
  * Per-user MFA factor state, persisted as a Jenkins {@link UserProperty}.
@@ -189,6 +191,36 @@ public class MfaUserProperty extends UserProperty {
     this.lastResendAt = lastResendAt;
   }
 
+  // ---------------------------------------------------------------------
+  // Task 9 — the security-tab section render model.
+  //
+  // Only PRESENTATION-of-the-property helpers live here, and only
+  // null-safe ones: a FRESH user's security tab binds instance=null (they
+  // have not yet enrolled a factor, so no MfaUserProperty exists), and the
+  // section must still render for them — an NPE here is exactly the
+  // "empty section, green build, the QR never works" silent failure the IT's
+  // render-presence case guards. The request-scoped helpers the section's
+  // JS needs (crumb field/value, the /mfa/ endpoint base) live on
+  // DescriptorImpl instead: the descriptor is bound as it in the section's
+  // include (see core's UserPropertyCategory*Action views) and is ALWAYS
+  // non-null, so the section can reach them without ever touching a null
+  // instance.
+  // ---------------------------------------------------------------------
+
+  /** Masked registered mailbox for display (e.g. {@code m***@devcru.org}). Empty — not null — when not enrolled. */
+  public String getMaskedRegisteredEmail() {
+    if (registeredEmail == null || registeredEmail.isBlank()) {
+      return "";
+    }
+    int at = registeredEmail.indexOf('@');
+    if (at < 1) {
+      return registeredEmail.charAt(0) + "***";
+    }
+    String local = registeredEmail.substring(0, at);
+    String domain = registeredEmail.substring(at);
+    return local.charAt(0) + "***" + domain;
+  }
+
   @Extension
   public static class DescriptorImpl extends UserPropertyDescriptor {
     public DescriptorImpl() {
@@ -203,6 +235,69 @@ public class MfaUserProperty extends UserProperty {
     @Override
     public UserPropertyCategory getUserPropertyCategory() {
       return UserPropertyCategory.get(UserPropertyCategory.Security.class);
+    }
+
+    // -- Task 9 section render model (descriptor-bound, always non-null) --
+
+    /**
+     * The CSRF crumb field name — core policy, delegated to
+     * {@link hudson.Functions#getCrumbRequestField()} (the same core static
+     * the login page's {@code MfaController.getCrumbField()} uses, so crumb
+     * policy stays in core across both pages). Null-safe for the pre-boot
+     * call path (falls back to the core default name).
+     */
+    public String getMfaCrumbField() {
+      try {
+        return hudson.Functions.getCrumbRequestField();
+      } catch (RuntimeException e) {
+        return CrumbIssuer.DEFAULT_CRUMB_NAME;
+      }
+    }
+
+    /**
+     * The current request's CSRF crumb value — delegated to
+     * {@link hudson.Functions#getCrumb(StaplerRequest2)} (the same core call
+     * the login page makes). "" when no crumb can be issued (the section's
+     * JS then refuses POSTs rather than sending a crumb-less request,
+     * matching the login page). The factor-management POSTs (postEnroll,
+     * postEnrollConfirm, …) ride this crumb — the endpoints are crumb-checked
+     * by core via {@code @RequirePOST}, exactly as postVerify/postResendEmail
+     * are on the login page.
+     */
+    public String getMfaCrumbValue() {
+      try {
+        StaplerRequest2 req2 = org.kohsuke.stapler.Stapler.getCurrentRequest2();
+        if (req2 == null) {
+          return "";
+        }
+        String crumb = hudson.Functions.getCrumb(req2);
+        return crumb == null ? "" : crumb;
+      } catch (RuntimeException e) {
+        return "";
+      }
+    }
+
+    /**
+     * The section's factor-management endpoint base — {@code <root>/mfa/}
+     * with a trailing slash, so the section's JS appends an endpoint name to
+     * reach {@code <root>/mfa/postEnroll} etc. The security tab lives at
+     * {@code <root>/user/<id>/security/}, so a <em>relative</em> endpoint
+     * URL from it would 404; this makes the base absolute. Delegated to
+     * {@link hudson.model.Jenkins#getRootUrl()} (core policy). Falls back to
+     * the context-relative {@code "mfa/"} if the root URL is not yet
+     * determined (pre-boot), which is still correct under a real host.
+     */
+    public String getMfaBaseUrl() {
+      try {
+        String root = jenkins.model.Jenkins.get().getRootUrl();
+        if (root == null) {
+          return "mfa/";
+        }
+        String b = root.endsWith("/") ? root : root + "/";
+        return b + "mfa/";
+      } catch (RuntimeException e) {
+        return "mfa/";
+      }
     }
 
     @Override

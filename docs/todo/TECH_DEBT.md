@@ -60,7 +60,7 @@ wired.
 > same object with the filter live).
 
 ### A2 — `emailCodeSecret` never minted; codes hash under a blank-string key
-**Status: RULING-RECORDED — lazy-mint path LANDED; Task 9 enrolment-UI path outstanding.** **Owner: controller lazy-mint (this commit) + Task 9 (enrolment UI minting). Both.**
+**Status: RESOLVED (Task 9, 2026-08-19) — both minting paths route through the single seam.** **Owner: controller lazy-mint + Task 9 (enrolment UI).**
 
 *Originally:* the controller fed
 `p.getEmailCodeSecret() == null ? "" : …` — a **blank-string HMAC key** — to
@@ -84,8 +84,15 @@ account hashed under the same empty key.
 > blank-string fallback is gone. Pinned by
 > `MfaControllerTest.lazilyMintsPerUserEmailCodeHmacKeyExactlyOnce`
 > (mint-once, idempotent, never-clobbers). TOTP-only users are never
-> handed a key. **Outstanding:** the Task 9 enrolment UI still owns the
-> *second* minting path (mint at enrolment, before first login).
+> handed a key.
+>
+> **Landed (Task 9, 2026-08-19):** the enrolment UI's `postEmailTestCode`
+> (the *second* minting path mads ruled) now routes through the SAME
+> `ensureEmailCodeSecret(p)` seam — one key per account, ever, minted only
+> behind `hasEmailFactor()`. Both paths share the seam; a single mint
+> implementation. Also, `postDisableEmail` retires the per-user key when the
+> mailbox is cleared, so a re-enrolled account re-mints cleanly (pinned in
+> `MfaProfileIT.disableAndRevokeEndpointsFlipExactlyTheRightFlags`).
 
 ### A3 — `?redirect=` query parameter vs `Referer`: two redirect contracts
 **Status: RESOLVED (plumbing, Task 7); Task 8 IT assertion remains (see A5).** **Owner: Task 7 (filter plumbing) + Task 8 (IT assertion, see A5).**
@@ -116,7 +123,7 @@ shaped validators, drift risk.
 > Jenkins (A5's IT half).
 
 ### A7 — `failedAttemptStreak` write-only and unbounded
-**Status: RULING-RECORDED.** **Owner: Task 9 (consumer + reset wiring).**
+**Status: RESOLVED (Task 9, 2026-08-19) — reset wired into the verify success path.** **Owner: Task 9 (consumer + reset wiring).**
 
 `postVerify` increments and persists it on every failure; `RateLimiter.clear`
 (success / lockout) does *not* reset it; nothing reads it yet. Grows
@@ -129,8 +136,20 @@ monotonically per user forever.
 > the property before `u.save()`. Until Task 9 lands, the field stays
 > write-only but bounded-in-effect by the lockout window's practical rate.
 
+> **Landed (Task 9, 2026-08-19):** the reset half is done — `postVerify`'s
+> success path resets `failedAttemptStreak` to 0 together with
+> `RateLimiter.clear` on the same `u.save()`, so a successful login starts
+> the streak fresh again; the field is no longer monotonic. Pinned at the
+> wire by `MfaProfileIT.disableAndRevokeEndpointsFlipExactlyTheRightFlags`
+> (wrong verify → streak 1; successful TOTP verify → streak 0). **Scope note
+> (honest deviation):** the "UI reads it" half of the ruling (a "recent
+> failed attempts" hint in the section) did NOT land — the section shows the
+> live lockout state the gate would impose, not the raw streak number. The
+> field is still consumed (gate RateLimiter + the reset path), so if a hint
+> is ever wanted it is a two-line jelly addition, not a growing counter.
+
 ### A8 — `lastVerifiedFactor` documented telemetry with no writer
-**Status: RULING-RECORDED.** **Owner: same commit as A7's Task 9 work.**
+**Status: RESOLVED (Task 9, 2026-08-19) — writer wired into the verify success path.** **Owner: same commit as A7's Task 9 work.**
 
 Javadoc says "0 = totp, 1 = email. Telemetry only." — but nothing writes it;
 every property carries `0` (implies TOTP) even for email-only users.
@@ -141,6 +160,20 @@ every property carries `0` (implies TOTP) even for email-only users.
 > factor. Same commit as the A7 fix. Note: "the clear-path resets it"
 > applies to the streak (A7); a last-factor has no reset — it is overwritten
 > by the next success by design.
+
+> **Landed (Task 9, 2026-08-19):** `postVerify` now tracks a `proven`
+> factor — the factor that actually PASSED verification, not the shape the
+> user submitted (a TOTP-shaped input that the gate fell through to email
+> records EMAIL, and vice versa) — and writes `lastVerifiedFactor`
+> (0 = TOTP, 1 = email) on the success path, on the same `u.save()` as the
+> A7 reset: no extra round trip. Pinned at the wire by
+> `MfaProfileIT.disableAndRevokeEndpointsFlipExactlyTheRightFlags`: the
+> test fabricates `lastVerifiedFactor = 1` (email), a TOTP verify then
+> succeeds, and the field lands on 0 — proving both that a writer exists
+> AND that it records the PROVEN factor, not the submitted shape. (The
+> email-proven branch writes 0→1 from the identical `proven` ternary; not
+> exercised in the profile IT — a captured mailbox is the filter IT's
+> territory.)
 
 ## OPEN — no ruling yet
 
@@ -389,6 +422,70 @@ has read access to the job API; the assertion compares the two rather than
 asserting a hardcoded status, so it keeps pinning itself if the anonymous
 access model ever changes). Existing Basic and anonymous cases remain green.
 
+### A22 — Security tab is core-ADMINISTER-gated; Task 9's "self-service via
+Manage account → Security" is IT-env-green and prod-strategy-dependent
+**Status: DEVIATION DOCUMENTED (Task 9, 2026-08-19) — endpoints shipped as
+strict self-service (A22-a, plan-aligned); admin-overrides (A22-b) not built.**
+**Owner: future task if/when mads wants admin management of other users'
+factors.**
+
+**What was verified against jenkins-core 2.528.3 (bytecode + jelly, not
+assumed):**
+
+1. `UserPropertyCategorySecurityAction/index.jelly` (the *Manage account →
+   Security* page) wraps the whole layout in
+   `<l:layout permission="${app.ADMINISTER}">` → **only callers with global
+   `ADMINISTER` get the page rendered at all** (others get the 403 the
+   layout emits).
+2. `UserPropertyCategoryAction.doConfigSubmit` (the tab's save path,
+   inherited) **first** instruction: `targetUser.checkPermission(
+   Jenkins.ADMINISTER)`; `User.getACL()` resolves via
+   `Jenkins.get().getAuthorizationStrategy().getACL(targetUser)` — i.e. the
+   answer is **authorization-strategy-dependent** per install.
+3. Bind mechanics (the part that made the build safe): the save path walks
+   `getMyCategoryDescriptors()`, extracts the `userProperty${index}`
+   rowSet per descriptor, and calls `reconfigure(rowSet)` /
+   `newInstance(User, rowSet)` → the property is bound only through its
+   `@DataBoundSetter`s. This plugin's only setter bindable from a form is
+   `registeredEmail` (String) — **the TOTP seed, mail HMAC key, trust
+   expiry, streak and pending-code state are NOT form-bindable**, so a
+   crafted profile submit cannot mint/overwrite a factor or grant trust
+   (pinned in `MfaUserPropertyTest`).
+
+**Consequences (the actual deviations from the plan's Task 9 framing):**
+
+- The plan's "user-facing, self-service" wording assumed a *self-admin*
+  security tab. Core's tab is *admin-facing.* Under the IT's
+  `FullControlOnceLoggedInAuthorizationStrategy` every logged-in user IS
+  the global admin, so **all `MfaProfileIT` flows (render, crumb,
+  enrolment, flips) pass** — the IT is green and genuine, but it does not
+  prove a non-admin self-service path.
+- On a real install, whether a **non-admin** can see/manage their own
+  section depends on the configured `AuthorizationStrategy` (the per-user
+  ACL that `getACL(User)` returns). Under a typical matrix strategy the
+  user-level ACL grants nothing → **non-admins cannot open the tab at all**;
+  they enroll via the gate-time flow (factorless users are NOT gated — see
+  README) — i.e. currently, on such installs, **enrolment requires an admin
+  or an authorization strategy that grants self-admin** (e.g.
+  `FullControlOnceLoggedInAuthorizationStrategy`, as the IT uses).
+- **Decision taken (A22-a, plan-aligned):** the six `/mfa` profile
+  endpoints act on `currentUser()` only (self-service contract: "admin not
+  required: owns own account"). They are deliberately NOT wired to
+  `targetUser` — an admin opening *someone else's* tab would otherwise see
+  buttons that manage the admin's own factors while the bound email field
+  edits the target's (two different users in one page, guaranteed confusion).
+- **Not built (A22-b):** admin-overrides targeting (`instance`'s user when
+  it differs from `currentUser()`, `ADMINISTER`-gated). Small, isolated
+  delta on the six endpoints + a `Jenkins.get().hasPermission(ADMINISTER)`
+  guard; needs a ruling before implementation (it changes whose profile the
+  buttons touch — a security surface, not a convenience).
+
+**Guard already in place:** the endpoints' guard is "authenticated, and the
+target of every write is the caller themselves" — so even in the strategy
+where non-admins reach the tab, cross-account writes are impossible, and
+the section's only form-bound field is the email (the save path's
+`configSubmit` also 403s for non-admins in practice, per (1)).
+
 ## CLOSED-ON-WATCH — no action, context for the next reader
 
 ### A4 — `DevcruMfaConfig.current()` scans `GlobalConfiguration.all()` per call
@@ -433,9 +530,10 @@ the full deviation record.
 
 ## Not in the code yet (planned work, not debt)
 
-Task 9's enrolment/management UI (+ A2's *second* minting path and A7/A8's
-telemetry consumer + reset wiring). Task 10's live-box cutover (the plan's
-backup/rollback section).
+Task 10's live-box cutover (the plan's backup/rollback section). (Task 9's
+enrolment/management UI + A2's second minting path + A7/A8's telemetry
+consumer + reset wiring LANDED 2026-08-19 — see the Task 9 handoff in
+`docs/todo/` for what shipped and the A22 deviation note.)
 
 ---
 
@@ -450,6 +548,9 @@ backup/rollback section).
 | A6 — README conflated the two trust instruments | One-sentence rewrite of "Remembered devices" in README "Practical usage": session trust (this login, no per-request re-check) vs. browser memory (future logins, the configured window) split into distinct sentences. | this commit (rulings, 2026-08-18) | End-user contract now matches §5 "Trust semantics" of the architecture record. |
 | A11 — `postVerify` comment drift on crumb embedding | Rewrote the endpoint-block comment in `MfaController`: the page gets the crumb from the Java model (`getCrumbField()`/`getCrumbValue()`), not via the `h` taglib (unbound — no `<l:view>`), and the model calls the same core static (`Functions.getCrumb`) so policy stays in core. | this commit (rulings, 2026-08-18) | Comment-only change. |
 | A13 — `resolveRedirectTarget`'s one-directional port check left unexplained | Expanded the `@param port` javadoc: a port-less referer is accepted on host match alone, and why that is benign for single-origin Jenkins (browsers only emit a port when non-default). | this commit (rulings, 2026-08-18) | Comment-only change; if Task 7's A3 plumbing touches this function, tighten the check to the same comment's argument. |
+| A2 — `emailCodeSecret` never minted; blank-string key | Second minting path (`postEmailTestCode`) now routes through the same `ensureEmailCodeSecret(p)` seam; `postDisableEmail` retires the key on mailbox clear. | Task 9 commit | One mint implementation for both paths; key never outlives its mailbox. |
+| A7 — `failedAttemptStreak` write-only and unbounded | `postVerify` success path resets the streak to 0 on the same `u.save()` as `RateLimiter.clear`; wire-pinned (wrong verify → 1, success → 0). The "UI reads it" hint half did NOT land (documented scope note under A7). | Task 9 commit | The streak is no longer monotonic; a hint remains a 2-line jelly add if ever wanted. |
+| A8 — `lastVerifiedFactor` had no writer | `postVerify` writes the factor that actually PROVED (0=TOTP, 1=email) on success — not the submitted shape; wire-pinned (fabricated 1 overwritten to 0 by a TOTP success). | Task 9 commit | Telemetry field is now truthful; email-proven branch (1) rides the same ternary, exercised by the filter IT's email path. |
 
 *Move items here with their fixing commit when closed. Keep the resolved
 text intact — this file is the audit trail.*
