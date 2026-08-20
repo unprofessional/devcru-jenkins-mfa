@@ -1,4 +1,14 @@
-# Task 10 handoff — written for a Sebastian with wiped context
+# ⛔ BLOCKED — Task 10 handoff (do NOT start until the urgent fix lands)
+
+> **STATUS: BLOCKED (2026-08-20).** An external security review (Moldy,
+> mads-directed) found a **critical authorization flaw** in the Task 9
+> surface — the gate's `/mfa` allow-list exposes all six management
+> endpoints to password-only sessions (audit item **A23**).
+> **DO NOT START TASK 10. DO NOT DEPLOY.** Do `docs/todo/
+> 2026-08-20-URGENT-authz-fix-handoff.md` first — findings, exact fix
+> shape, and the red→green test contract are all in there. This doc stays
+> the Task 10 (deploy) kickoff and is accurate again once the urgent
+> handoff is stamped LANDED and moved to `docs/done/`.
 
 **Written 2026-08-19, by Sebastian, at mads's direction (session reset
 immediately follows).** Everything below is verified state as of this
@@ -8,12 +18,10 @@ design, but the "read these first" list at the bottom is still required
 bedside reading.
 
 **Context in one line:** Task 9 (the user-facing factor-management UI on
-*Manage account → Security*) **LANDED with the commit that adds this doc
-(one commit ahead of `57fcccc`)**. This handoff is therefore (a) the
-**Task 9 landing record** — what shipped, what deviated, what is pinned
-where — and (b) the **Task 10 (deploy to `jenkins.devcru.org`) kickoff**.
-There is **no more development work** between this doc and the live-box
-cutover, unless mads rules on the documented A22-b follow-up.
+*Manage account → Security*) **LANDED at `2f150e0`**. This handoff is
+therefore (a) a pointer to the Task 9 landing record (§3 — full record in
+`docs/done/2026-08-19-task9-handoff.md`) and (b) the **Task 10 (deploy to
+`jenkins.devcru.org`) kickoff**, gated on the urgent A23 fix.
 
 ---
 
@@ -21,27 +29,15 @@ cutover, unless mads rules on the documented A22-b follow-up.
 
 `devcru-mfa` (repo `/home/hunter/dev/devcru-jenkins-mfa`, branch
 **`develop`**, remote `github.com:unprofessional/devcru-jenkins-mfa.git`)
-sits one commit ahead of `57fcccc` (the commit that made the Task 9 prep
-handoff reset-ready). **Tasks 0–9 are complete**; Tasks 0–8 plus A21 were
-already pushed and CI-green before the Task 9 session. Task 9's landing
-commit adds: the six `/mfa` profile endpoints (`postEnroll`,
-`postEnrollConfirm`, `postEmailTestCode`, `postDisableTotp`,
-`postDisableEmail`, `postRevokeTrust`), the security-tab section view
-(`src/main/resources/org/sebcru/mfa/MfaUserProperty/config.jelly`,
-descriptor-relative path — a wrong path fails *silently*, see §4.1), the
-`zxing:javase` dependency, A7's streak reset + A8's proven-factor writer in
-`postVerify`, `MfaProfileSeamTest` (6 unit) and `MfaProfileIT` (4 booted),
-plus the same-commit docs (TECH_DEBT A2/A7/A8 resolved + **A22** new,
-README practical usage, plan LANDED stamp). At the moment of writing:
-**`mvn -o -B -ntp clean verify` is BUILD SUCCESS — 94/94 tests, SpotBugs
-0 bugs, `.hpi` produced** (the earlier red — `REC_CATCH_EXCEPTION` in
-`qrDataUri`, fixed by narrowing `catch (Exception)` to
-`catch (com.google.zxing.WriterException | java.io.IOException)` — is
-closed and pinned by the linter itself). CI on the devcru GitHub instance
-will re-run `mvn clean verify` on push; local `clean verify` mirrors it.
-**Next: Task 10 (deploy to `jenkins.devcru.org`)** — see §9 and the plan's
-Backup & rollback section; no new code is expected unless mads rules on
-A22-b (§6).
+at `2f150e0` (Task 9 landed, pushed, CI-green). **Tasks 0–9 are
+complete**, but **Task 10 is BLOCKED**: Moldy's 2026-08-19 external
+review found a critical authorization flaw in the Task 9 surface (A23 —
+gate allow-list exposes the six management endpoints to password-only
+sessions). **The urgent handoff (`docs/todo/
+2026-08-20-URGENT-authz-fix-handoff.md`) must land green before anything
+below is executed.** Build state at Task 9 landing: `mvn -o -B -ntp clean
+verify` BUILD SUCCESS — 94/94 tests, SpotBugs 0 bugs, `.hpi` produced; CI
+mirrors `mvn clean verify` on push.
 
 ## 2. Operating environment (exact commands)
 
@@ -74,99 +70,27 @@ Rules (from `AGENTS.md` — read it, it is required-reading):
   terminal output to a line — redirect long output to a file first, then
   inspect surgically.
 
-## 3. What Task 9 shipped (verified inventory)
+## 3. What Task 9 shipped (compact — full record moved)
 
-**`MfaController` (six new endpoints, all under the existing `/mfa`
-RootAction mount — `getUrlName()="mfa"`):**
+**Full landing record:** `docs/done/2026-08-19-task9-handoff.md` (the Task 9
+prep handoff — IT mechanics, seam inventory, pom notes) plus the Task 9
+section of the plan, now archived at `docs/done/2026-08-17-plan-tasks-0-9.md`.
+Only the deploy-relevant surface stays here:
 
-| endpoint | body params | commits | returns |
-|---|---|---|---|
-| `postEnroll` | — | **nothing** (seed is one-time, returned for the round trip) | `{ok, seed, otpauthUri, dataUriPng}` |
-| `postEnrollConfirm` | `seed`, `code` | `otpauthUri` secret ONLY when `Totp.verify` passes; never clobbers a working factor on failure | `{ok}` or `{ok:false, error: wrong_code|invalid_seed|totp_already_enabled}` |
-| `postEmailTestCode` | — | mints through the SAME `ensureEmailCodeSecret(p)` seam (A2's second minting path) then mails | `{ok}` or `{ok:false, error: resend_cooldown, retrySeconds}` / `email_unconfigured` |
-| `postDisableTotp` | — | clears `totpSecret` | `{ok}` |
-| `postDisableEmail` | — | clears `registeredEmail` **and retires `emailCodeSecret`** (a re-enrolled account re-mints cleanly) | `{ok}` |
-| `postRevokeTrust` | — | `trustedUntilMs := 0` (touch-only, idempotent) | `{ok}` |
-
-All six: `@RequirePOST` **and** `@WebMethod(name = …)` — the A20 lesson
-(bare `@RequirePOST` 404s; `@WebMethod` is what routes). All act on
-`currentUser()` (strict self-service — A22, §6). JSON via `writeProfileJson`
-/ `okJson` (net.sf.json `JSONObject.put` returns `Object` — discrete `put`
-calls, no chaining).
-
-**Pure seams (unit-pinned by `MfaProfileSeamTest`, 6 tests):**
-`buildOtpauthUri(issuer, account, seed)` (canonical `otpauth://otp/…`
-shape, percent-encoding of hostile chars via the `HEX` table; NOT
-`URLEncoder`), `qrDataUri(uri)` (zxing 300×300 PNG → `data:image/png;base64,…`;
-blank input → `""`; render failure → `""` — a QR is a convenience, manual
-entry is the fallback, a 500 would hide both), `confirmEnrollDecision(
-prop, seed, code, now, window)` (the verify-before-commit rule),
-`percentEncode` (unreserved set + `:` `,` stay plain).
-
-**A7 + A8 in `postVerify` (not new endpoints — the success path):**
-a `proven` local tracks **which factor actually PASSED** (not the shape
-submitted — a TOTP-shaped input the gate fell through to email records
-EMAIL); on success the same `u.save()` that grants trust also does
-`p.setFailedAttemptStreak(0)` (A7 reset) and
-`p.setLastVerifiedFactor(proven == EMAIL ? 1 : 0)` (A8 writer). No extra
-round trip. Wire-pinned in `MfaProfileIT` case c (§3 below).
-
-**`MfaUserProperty`:** only NEW addition is `getMaskedRegisteredEmail()`
-(null-safe, returns `""`). **The request-scoped section helpers
-(`mfaCrumbField` / `mfaCrumbValue` / `mfaBaseUrl`) deliberately live on
-`DescriptorImpl`, NOT the property** — the core security-page include binds
-`it` = the descriptor (always non-null) and `instance` = the property
-(**null for a fresh user**); and crumb/base are per-request state, not
-persisted state. Note: `jenkins.model.Jenkins` (not `hudson.model.Jenkins`).
-
-**The section view** — `src/main/resources/org/sebcru/mfa/MfaUserProperty/
-config.jelly` (exact descriptor-relative path; §4.1 for why). No nested
-`<f:form>` (the tab supplies ONE form → `configSubmit`); `f:invisibleEntry`
-dummy keeps the `f:rowSet` non-empty; the ONLY form-bound field is
-`registeredEmail` via `f:textbox` `field=` binding; everything else (the
-section's ids: `mfaSection`, `mfaTotpGenerate`, `mfaTotpConfirm`,
-`mfaTotpDisable`, `mfaEmail*`, `mfaRevokeTrust`) is presentation + a small
-XHR block posting to the descriptor's ABSOLUTE `mfaBaseUrl` with the
-descriptor-sourced crumb.
-
-**`pom.xml`:** `com.google.zxing:javase:${zxing.version}` (3.5.3) added
-beside existing `core` — `core` has `QRCodeWriter`/`BitMatrix`/the
-**reader** classes; `javase` has `MatrixToImageWriter` (PNG bytes) and
-`BufferedImageLuminanceSource` (decode-back for the round-trip test).
-Both artifacts are primed in `~/.m2`, so `mvn -o` resolves them offline.
-
-**Tests (all BDD-documented per `AGENTS.md`):**
-- `MfaProfileSeamTest` — 6 plain-JVM unit tests over the four pure seams
-  (otpauth URI incl. hostile chars; QR PNG **decodes back to exactly the
-  input URI** — a truncating render is a loud red, not "your QR never
-  works"; verify-before-commit; no-commit-on-failure; no-clobber).
-- `MfaProfileIT` — 4 booted-Jenkins ITs (the shapes below).
-- Unchanged suite: `MfaFilterIT` 8, `MfaControllerTest` 9,
-  `MfaUserPropertyTest` 5, config/gate/totp/email suites — total **94**.
-
-**`MfaProfileIT` cases (4, ~20 s total):**
-1. `sectionRendersOnTheSecurityPageForEnrolledAndFreshUsers` — the 5.1
-   silent-failure guard: `id="mfaSection"` present on the **LIVE**
-   security page for (a) an enrolled user (who is verified first to pass
-   the gate — §4.3) showing `mfaTotpDisable` not Generate, and (b) a fresh
-   user (ungated; no factor → `hasTotpFactor()==false` — NOT a property
-   nullity assertion, §4.5) showing `mfaTotpGenerate` not Disable.
-2. `enrollConfirmRoundTripCommitsOnlyOnACorrectCode` — `postEnroll`
-   commits nothing (seed in response, property untouched); correct
-   `Totp.codeAt` → property `getTotpSecret().getPlainText() == seed` and
-   `hasTotpFactor()`; a wrong code for a *second* candidate →
-   `wrong_code` + the working seed byte-identical + still verifying.
-3. `disableAndRevokeEndpointsFlipExactlyTheRightFlags` — now ALSO pins the
-   A7/A8 wire contract (session-extended): wrong `postVerify` code →
-   `failedAttemptStreak == 1`; successful TOTP verify → streak
-   `== 0` (A7) AND `lastVerifiedFactor == 0` (A8) **over a fabricated
-   `1`** (email), proving the writer records the PROVEN factor; then each
-   of the three disable/revoke endpoints flips exactly its own persisted
-   flag (incl. email-key retirement).
-4. `allSixProfileEndpointsAreRoutedNot404` — the A20 boot guard: every
-   endpoint answers **200** with a JSON `ok` key (a bare `@RequirePOST`
-   method would 404 — the one thing that proves `@WebMethod` routing on a
-   live Stapler).
+- **Six JSON endpoints under `/mfa`** (all `@RequirePOST` + `@WebMethod`,
+  crumb-guarded, `currentUser()`-scoped): `postEnroll`,
+  `postEnrollConfirm`, `postEmailTestCode`, `postDisableTotp`,
+  `postDisableEmail`, `postRevokeTrust`. ⚠️ **As of 2026-08-20 these six
+  are the A23 surface — the urgent handoff adds a pre-verify guard to all
+  of them; re-read their contract there after it lands.**
+- **The section view** at
+  `src/main/resources/org/sebcru/mfa/MfaUserProperty/config.jelly`
+  (descriptor-relative; a wrong path fails *silently* — §4.1).
+- **A7 + A8 in `postVerify`:** the success path resets
+  `failedAttemptStreak` and writes `lastVerifiedFactor` (the PROVEN
+  factor, not the submitted shape) on the same `u.save()`.
+- **Test suite at 94** (unit + 3 booted IT classes); `mvn -o -B -ntp clean
+  verify` is the only full validation.
 
 ## 4. The traps (verified against 2.528.3 + the red rounds — do not rediscover)
 
@@ -331,22 +255,23 @@ six JSON endpoints (crumb-guarded, `currentUser()`-scoped).
 
 1. `AGENTS.md` (repo root) — the binding rules (BDD test docs,
    same-commit rule, `clean verify`).
-2. `docs/plans/2026-08-17-jenkins-mfa-plugin.md` — **Task 9 section**
-   (LANDED 2026-08-19 stamp at the top) for what was required; **Task 10
-   section + Backup & rollback** for what's next; the **AMENDMENTS block**
+2. **`docs/todo/2026-08-20-URGENT-authz-fix-handoff.md` — DO THIS FIRST.**
+   The A23 critical findings + fix plan. Task 10 below is gated on it.
+3. `docs/plans/2026-08-17-jenkins-mfa-plugin.md` — **Task 10 section +
+   Backup & rollback** for what's next; the **AMENDMENTS block**
    (plan-header) for the mads rulings (`/mfa` mount, Bearer, corrected
-   view path).
-3. `docs/todo/TECH_DEBT.md` — **A22** (the deviation, full spec), the
-   A2/A7/A8 "Landed (Task 9, 2026-08-19)" notes, and the Resolved table
-   rows for A2/A7/A8.
-4. **This doc.**
-5. `docs/architecture/README.md` — the design-decision record the code
+   view path). Tasks 0–9 records moved to
+   `docs/done/2026-08-17-plan-tasks-0-9.md`.
+4. `docs/todo/TECH_DEBT.md` — **A23** (the urgent finding), **A22** (the
+   deviation, full spec), the A2/A7/A8 "Landed (Task 9, 2026-08-19)"
+   notes, and the Resolved table rows for A2/A7/A8.
+5. **This doc.**
+6. `docs/architecture/README.md` — the design-decision record the code
    audited against (§10 points here from TECH_DEBT).
-6. `docs/done/2026-08-19-task9-handoff.md` — the Task 9 PREP handoff
-   (moved to `done/` with this commit): still accurate for the IT
-   mechanics it was written to protect; this doc supersedes it for
-   current state.
-7. The `jenkins-plugin-operations` skill (`skill_view`) — host build
+7. `docs/done/2026-08-19-task9-handoff.md` — the Task 9 PREP handoff:
+   still accurate for the IT mechanics it was written to protect; this
+   doc supersedes it for current state.
+8. The `jenkins-plugin-operations` skill (`skill_view`) — host build
    env, deploy/rollback discipline, CI forensics, and its
    `references/task9-profile-ui-defects.md` (the red→green forensics of
    THIS session's IT rounds + working helper recipes).
