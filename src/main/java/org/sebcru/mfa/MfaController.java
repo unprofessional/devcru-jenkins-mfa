@@ -347,15 +347,21 @@ public class MfaController implements RootAction {
     //    email factor, so a TOTP-only account is never handed a key it has no
     //    use for.
     boolean verified = false;
+    // A8: which factor actually PASSED (null until proven). Records the factor
+    // that verified, not the shape submitted — a 6-digit-shaped input that
+    // fell back to the email factor (or vice versa) records EMAIL/TOTP exactly.
+    Factor proven = null;
     String failReason = VerifyOutcome.ERR_NOT_ENROLLED;
     switch (f) {
       case TOTP:
         if (p.hasTotpFactor()) {
           verified = verifyTotp(p, cfg, submitted, now);
+          proven = verified ? Factor.TOTP : null;
           failReason = VerifyOutcome.ERR_WRONG_CODE;
         } else if (p.hasEmailFactor()) {
           EmailCodeIssuer.VerifyResult r = verifyEmail(p, cfg, submitted, now);
           verified = r == EmailCodeIssuer.VerifyResult.CONSUMED;
+          proven = verified ? Factor.EMAIL : null;
           failReason = emailFailReason(r);
         }
         break;
@@ -363,9 +369,11 @@ public class MfaController implements RootAction {
         if (p.hasEmailFactor()) {
           EmailCodeIssuer.VerifyResult r = verifyEmail(p, cfg, submitted, now);
           verified = r == EmailCodeIssuer.VerifyResult.CONSUMED;
+          proven = verified ? Factor.EMAIL : null;
           failReason = emailFailReason(r);
         } else if (p.hasTotpFactor()) {
           verified = verifyTotp(p, cfg, submitted, now);
+          proven = verified ? Factor.TOTP : null;
           failReason = VerifyOutcome.ERR_WRONG_CODE;
         }
         break;
@@ -376,9 +384,19 @@ public class MfaController implements RootAction {
     }
 
     if (verified) {
-      // 3. Success: grant trust (floor applied inside TrustStore), clear the
-      //    failure history, regenerate the session to kill any fixated id,
-      //    and mark it verified so the Task 7 gate passes it.
+      // 3. Success: A7/A8 (mads ruling 2026-08-18) — the clear path resets
+      //    the failure streak (consumed for display by the Task 9 profile
+      //    section) and logs which factor was actually PROVEN (last-write
+      //    log; a shape that fell back to the other enrolled factor records
+      //    the factor that verified, not the shape submitted). Both persist
+      //    on the exact u.save() below — no extra round trip.
+      p.setFailedAttemptStreak(0);
+      if (proven != null) {
+        p.setLastVerifiedFactor(proven == Factor.EMAIL ? 1L : 0L);
+      }
+      // Grant trust (floor applied inside TrustStore), regenerate the session
+      // to kill any fixated id, and mark it verified so the Task 7 gate passes
+      // it.
       try {
         trustStore.trust(p, cfg, now);
         u.save();
@@ -467,6 +485,282 @@ public class MfaController implements RootAction {
   }
 
   // ---------------------------------------------------------------------
+  // Task 9 — the profile-page factor-management endpoints (six). All run
+  // on the SAME gate as postVerify/postResendEmail: an enrolled user who
+  // has not yet proven a factor this session is bounced by the gate
+  // before any of them; API-token requests (Basic AND A21 Bearer) are
+  // exempt from the gate here exactly as everywhere else. The section
+  // itself renders on Manage account → Security (core action); these
+  // endpoints are where the section's buttons land.
+  //
+  // URL ROUTING (A20, same rule as postVerify/postResendEmail — non-
+  // negotiable per endpoint, landed in this commit with the method):
+  // @RequirePOST is policy, not routing. Every one of the six carries
+  // @WebMethod(name = "…") or <ctx>/mfa/<token> 404s and the section's
+  // buttons are dead. MfaProfileIT's six-endpoint 404 guard is the boot
+  // proof for all of them, A20-style.
+  // ---------------------------------------------------------------------
+
+  /**
+   * Generate a fresh TOTP enrolment candidate: a new 128-bit Base32 seed,
+   * its {@code otpauth://} URI, and the QR as a data-URI PNG. NOTHING is
+   * written to the user's property — the candidate lives only in the form's
+   * hidden inputs until {@code postEnrollConfirm} proves a code for it
+   * (single-POST commit; no server-side pre-commit state — that would be a
+   * credential in the session with its own expiry lifecycle).
+   *
+   * <p>Contract (plan Task 9 table): success {@code {ok:true, seed,
+   * otpauthUri, dataUriPng}}; render failure is still ok:true with an EMPTY
+   * dataUriPng (QR is the convenience, manual entry is the fallback);
+   * only an unexpected server fault is {@code {ok:false, error:"server_error"}}.
+   */
+  @RequirePOST
+  @WebMethod(name = "postEnroll")
+  public void postEnroll(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    User u = currentUser();
+    if (u == null) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
+      return;
+    }
+    try {
+      String seed = Totp.newBase32Secret();
+      String issuer = DevcruMfaConfig.currentSafe().getIssuer();
+      String uri = buildOtpauthUri(issuer, u.getId(), seed);
+      // net.sf.json's JSONObject.put returns Object (not JSONObject), so no
+      // put-chaining — build the JSON with discrete puts.
+      JSONObject j = okJson();
+      j.put("seed", seed);
+      j.put("otpauthUri", uri);
+      j.put("dataUriPng", qrDataUri(uri));
+      writeProfileJson(rsp, j);
+    } catch (RuntimeException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+    }
+  }
+
+  /**
+   * Commit a TOTP enrolment: verify the presented code against the
+   * presented seed (± the admin window) and ONLY then write the seed to the
+   * user's property (the {@link #confirmEnrollDecision} seam decides +
+   * performs the write; the single {@code u.save()} below persists it).
+   *
+   * <p>Contract: success {@code {ok:true}} — the seed is now the user's TOTP
+   * factor (replacing a previous one: re-enrolling with a new device IS the
+   * failure {@code {ok:false, error:"invalid_seed"|"wrong_code"}}
+   * — the presented seed is NEVER committed on a failed confirm, so a wrong
+   * code while testing a second phone cannot clobber the working factor.
+   * No rate limit here: the candidate seed is in the user's own form and an
+   * unverified code proves nothing (there is nothing to brute — the seed is
+   * the key, the code is derived, and 10⁶ guesses per presented seed burn
+   * only the presenter's own patience; the gate-side limiter bounds the
+   * login path, which is where the account is defended).
+   */
+  @RequirePOST
+  @WebMethod(name = "postEnrollConfirm")
+  public void postEnrollConfirm(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    User u = currentUser();
+    if (u == null) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
+      return;
+    }
+    MfaUserProperty p;
+    try {
+      p = MfaUserProperty.getOrCreate(u);
+    } catch (IOException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+      return;
+    }
+    long now = System.currentTimeMillis();
+    EnrollDecision d = confirmEnrollDecision(p,
+        req.getParameter("seed"), req.getParameter("code"), now,
+        DevcruMfaConfig.currentSafe().getTotpWindow());
+    if (d.error() != null) {
+      write(rsp, VerifyOutcome.fail(d.error()));
+      return;
+    }
+    try {
+      u.save();
+    } catch (IOException ignore) {
+      // In-memory property already carries the factor; a persistence hiccup
+      // reports as ok (the user has the QR secret in hand and can retry
+      // confirm) rather than implying the commit failed.
+    }
+    writeProfileJson(rsp, okJson());
+  }
+
+  /**
+   * Issue a test one-time code for the profile section — the same delivery
+   * path as the login page's {@code postResendEmail} (registered mailbox
+   * only, single live code, one-per-minute cooldown), routed through the
+   * SINGLE mint seam {@link #ensureEmailCodeSecret} (A2: the enrolment-UI
+   * path is the second minting path mads ruled; there is no second
+   * implementation here).
+   *
+   * <p>Contract: success {@code {ok:true, resent:true, cooldown}};
+   * failure {@code {ok:false, error:"email_not_enrolled"|
+   * "resend_cooldown"[, retrySeconds]}}.
+   */
+  @RequirePOST
+  @WebMethod(name = "postEmailTestCode")
+  public void postEmailTestCode(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    User u = currentUser();
+    if (u == null) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
+      return;
+    }
+    MfaUserProperty p;
+    try {
+      p = MfaUserProperty.getOrCreate(u);
+    } catch (IOException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+      return;
+    }
+    if (!p.hasEmailFactor()) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_EMAIL_NOT_ENROLLED));
+      return;
+    }
+    DevcruMfaConfig cfg = DevcruMfaConfig.currentSafe();
+    long now = System.currentTimeMillis();
+    long cooldownMs = (long) cfg.getEmailResendCooldownSeconds() * 1000L;
+    long last = p.getLastResendAt();
+    if (last > 0 && now - last < cooldownMs) {
+      long remainSec = (cooldownMs - (now - last)) / 1000L + 1L;
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_COOLDOWN).withRetrySeconds(remainSec));
+      return;
+    }
+    // The A2 seam: one mint, idempotent, behind hasEmailFactor() — the
+    // exact same call postResendEmail/verifyEmail make. One key per account,
+    // ever.
+    String perUserSecret = ensureEmailCodeSecret(p);
+    String code = emailIssuer.resend(p, perUserSecret, now,
+        cfg.getEmailResendCooldownSeconds(), cfg.getEmailCodeTtlSeconds(), emailSender);
+    if (code == null) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_COOLDOWN)
+          .withRetrySeconds(cfg.getEmailResendCooldownSeconds()));
+      return;
+    }
+    try {
+      u.save();
+    } catch (IOException ignore) {
+      // Non-fatal; the pending hash/issued-at are already set in memory.
+    }
+    write(rsp, VerifyOutcome.resent(cfg.getEmailResendCooldownSeconds()));
+  }
+
+  /**
+   * Disable the TOTP factor (remove it from the property; the user may
+   * re-enroll at any time — re-enrolment IS the new-device swap path).
+   *
+   * <p>Contract: success {@code {ok:true}} (idempotent-safe: disabling an
+   * already-absent factor is still a no-op success — the button does not
+   * 500 on an empty state); failure {@code {ok:false, error:"not_enrolled"}}
+   * is reserved for the NOT-LOGGED-IN shape (nothing to act on).
+   *
+   * <p>WHY/SOLVES: self-service removal is the user's recovery lever
+   * (lost phone → admin recovery path, plan decision 7, clears the WHOLE
+   * property; this removes ONE factor). It is deliberately NOT confirmed
+   * with a second factor: the caller already sits behind the gate
+   * (password + second factor already proven this session) or is an
+   * API-token request — an enrolled, gated, unverified session cannot
+   * reach this endpoint at all.
+   */
+  @RequirePOST
+  @WebMethod(name = "postDisableTotp")
+  public void postDisableTotp(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    User u = currentUser();
+    if (u == null) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
+      return;
+    }
+    MfaUserProperty p;
+    try {
+      p = MfaUserProperty.getOrCreate(u);
+    } catch (IOException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+      return;
+    }
+    p.setTotpSecret(null);
+    try {
+      u.save();
+    } catch (IOException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+      return;
+    }
+    writeProfileJson(rsp, okJson());
+  }
+
+  /**
+   * Disable the email factor: clear the registered mailbox (which is
+   * {@code hasEmailFactor()}'s definition, so the factor goes with it) AND
+   * retire the per-user HMAC key (it is meaningless without a mailbox and
+   * keeping it would re-arm the mint seam on the next enrol).
+   *
+   * <p>Contract: success {@code {ok:true}} (idempotent-safe as above);
+   * {@code {ok:false, error:"not_enrolled"}} for the not-logged-in shape.
+   */
+  @RequirePOST
+  @WebMethod(name = "postDisableEmail")
+  public void postDisableEmail(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    User u = currentUser();
+    if (u == null) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
+      return;
+    }
+    MfaUserProperty p;
+    try {
+      p = MfaUserProperty.getOrCreate(u);
+    } catch (IOException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+      return;
+    }
+    p.setRegisteredEmail(null);
+    p.setEmailCodeSecret(null);
+    try {
+      u.save();
+    } catch (IOException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+      return;
+    }
+    writeProfileJson(rsp, okJson());
+  }
+
+  /**
+   * Revoke remembered devices: kill the user's persisted trust record so
+   * the NEXT login from any browser prompts for the second factor again
+   * (the CURRENT session keeps its verified flag — this is a "future
+   * logins" lever, the signed trust semantics; killing the live session
+   * would log the acting user out of their own admin work).
+   *
+   * <p>Contract: always {@code {ok:true}} — a revoke with no live trust is
+   * a no-op-safety success by design (the plan table's "— (always a
+   * no-op-safe success)").
+   */
+  @RequirePOST
+  @WebMethod(name = "postRevokeTrust")
+  public void postRevokeTrust(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    User u = currentUser();
+    if (u == null) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
+      return;
+    }
+    MfaUserProperty p;
+    try {
+      p = MfaUserProperty.getOrCreate(u);
+    } catch (IOException e) {
+      write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_SERVER));
+      return;
+    }
+    trustStore.revoke(p);
+    try {
+      u.save();
+    } catch (IOException ignore) {
+      // In-memory trust is already 0; the save persists it for the next
+      // login. A hiccup here is the same shape as postVerify's (non-fatal).
+    }
+    writeProfileJson(rsp, okJson());
+  }
+
+  // ---------------------------------------------------------------------
   // Private glue (Task 8 territory) — kept small and obvious.
   // ---------------------------------------------------------------------
 
@@ -540,6 +834,33 @@ public class MfaController implements RootAction {
     w.flush();
   }
 
+  /**
+   * The Task 9 profile-section JSON writer: same header treatment as
+   * {@link #write}, a different body — a free {@link JSONObject} (usually
+   * rooted at {@link #okJson()}) because the section's responses carry
+   * enrolment payloads (seed / otpauthUri / dataUriPng) the
+   * {@code VerifyOutcome} contract deliberately does not know about.
+   * 500s are the caller's problem: every Task 9 endpoint answers 200 +
+   * JSON, the stable {@code error} string is the contract, and a 500 here
+   * would be an unhandled-exception symptom the page cannot distinguish.
+   */
+  private void writeProfileJson(StaplerResponse2 rsp, JSONObject j) throws IOException {
+    rsp.setStatus(200);
+    rsp.setHeader("Content-Type", "application/json;charset=UTF-8");
+    rsp.setHeader("Cache-Control", "no-store");
+    rsp.setHeader("X-Content-Type-Options", "nosniff");
+    PrintWriter w = rsp.getWriter();
+    w.print(j.toString());
+    w.flush();
+  }
+
+  /** The success root for a profile-section response: {@code {"ok":true}}. */
+  private static JSONObject okJson() {
+    JSONObject j = new JSONObject();
+    j.put("ok", true);
+    return j;
+  }
+
   // Test seam (package-private): Task 8 injects a capture sender.
   void setSenderForTest(EmailSender sender) {
     this.emailSender = sender;
@@ -586,6 +907,196 @@ public class MfaController implements RootAction {
     String minted = Totp.newBase32Secret();
     p.setEmailCodeSecret(Secret.fromString(minted));
     return minted;
+  }
+
+  // =====================================================================
+  // Task 9 — the factor-management (profile page) seams. Pure: no Jenkins,
+  // no I/O, no hidden clock. The profile section's six endpoints are the
+  // thin glue around these; the decisions themselves live here so they are
+  // pinable in a plain JVM (MfaProfileSeamTest) before any boot.
+  // =====================================================================
+
+  /** Stable reason for {@link #confirmEnrollDecision} when the seed is not usable Base32. */
+  public static final String ERR_INVALID_SEED = "invalid_seed";
+
+  /**
+   * Build the {@code otpauth://} URI that enrolment QR codes encode — the
+   * exact string every RFC 6238 authenticator app (Authy, Google
+   * Authenticator, 1Password) parses.
+   *
+   * <p>GIVEN an issuer, an account id, and a canonical unpadded Base32
+   * secret WHEN built THEN the URI is
+   * {@code otpauth://otp/<label>?secret=<s>&issuer=<i>&algorithm=SHA1&digits=6&period=30}
+   * where the label is {@code <issuer>:<account>} (the OTPAuth convention,
+   * the colon unencoded — it separates label parts, not query parts) and
+   * EVERYTHING else percent-encoded: label characters, the issuer
+   * parameter, the secret (uppercase — apps are case-agnostic, but
+   * canonical form avoids double-encoders lowercasing it). A raw
+   * space/ampersand/equals/percent/plus anywhere would either break strict
+   * parsers or let the label/issuer inject query structure, so the
+   * round-trip test pins hostile characters, not just the happy path.
+   *
+   * <p>WHY/SOLVES: this string is the interop boundary with the user's
+   * phone. A dropped parameter silently downgrades the app to defaults
+   * (wrong digits/period/algorithm → "your codes never work", no error in
+   * Jenkins at all); an unencoded space in the issuer breaks strict
+   * parsers the same way. The QR is built FROM this string in the same
+   * commit, so a bad URI and a bad QR cannot drift apart.
+   */
+  static String buildOtpauthUri(String issuer, String account, String base32Secret) {
+    String label = enc(issuer) + ":" + enc(account);
+    return "otpauth://otp/" + label
+        + "?secret=" + enc(base32Secret.toUpperCase(java.util.Locale.ROOT))
+        + "&issuer=" + enc(issuer)
+        + "&algorithm=SHA1"
+        + "&digits=" + Totp.DIGITS
+        + "&period=" + Totp.STEP_SECONDS;
+  }
+
+  /**
+   * Percent-encode a value for a URI structural position (label or query
+   * parameter), preserving the unreserved set plus the label separator
+   * characters that are safe here. Everything else — space, {@code & = % +
+   * / ? #} — is escaped, so a value can never be re-parsed as URI structure
+   * by the app that decodes the QR.
+   *
+   * <p>(The alternative, {@code URLEncoder.encode(…, UTF_8)}, turns spaces
+   * into {@code +}, which a query-position consumer decodes back to a
+   * space — right in a query, wrong inside a label. {@code %20} is correct
+   * in BOTH positions, so everything here uses it.)
+   */
+  private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+
+  private static String enc(String s) {
+    if (s == null) {
+      return "";
+    }
+    StringBuilder out = new StringBuilder(s.length());
+    for (byte b : s.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+      int v = b & 0xff;
+      char c = (char) v;
+      if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+          || c == '-' || c == '_' || c == '.' || c == '~' || c == ':' || c == ',') {
+        out.append(c);
+      } else {
+        out.append('%').append(HEX[(v >> 4) & 0x0f]).append(HEX[v & 0x0f]);
+      }
+    }
+    return out.toString();
+  }
+
+  /**
+   * Render a URI as a 300×300 QR code and return it as a
+   * {@code data:image/png;base64,….} string for an {@code <img>} tag.
+   *
+   * <p>Fail-closed per the seam contract: an unrenderable input (blank,
+   * null, or too large for the fixed size) returns the empty string — the
+   * profile section then shows NO image and the manual-secret field remains
+   * the working path; the endpoint still answers JSON. A zxing
+   * {@code WriterException} must never escape into the 200-or-500 choice of
+   * a web endpoint: the QR is a convenience, manual entry is the fallback,
+   * and a 500 would hide both. The 300×300 size is a fixed constant
+   * (a version ~5–6 QR that every camera decodes cleanly at phone distance,
+   * not a parameter the caller can twist).
+   *
+   * <p>WHY/SOLVES: single render path (same A2 discipline as
+   * {@link #ensureEmailCodeSecret}) — the endpoint cannot have a second,
+   * divergent QR builder, and the round-trip test in
+   * {@code MfaProfileSeamTest} pins "the PNG decodes back to EXACTLY the
+   * input URI" so a truncating render (working image, wrong secret) is a
+   * loud red instead of a "QR never works" support ticket.
+   */
+  static String qrDataUri(String uri) {
+    if (uri == null || uri.isBlank()) {
+      return "";
+    }
+    try {
+      com.google.zxing.common.BitMatrix matrix = new com.google.zxing.qrcode.QRCodeWriter()
+          .encode(uri, com.google.zxing.BarcodeFormat.QR_CODE, 300, 300);
+      java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+      com.google.zxing.client.j2se.MatrixToImageWriter.writeToStream(matrix, "PNG", bos);
+      return "data:image/png;base64,"
+          + java.util.Base64.getEncoder().encodeToString(bos.toByteArray());
+    } catch (com.google.zxing.WriterException | java.io.IOException e) {
+      // Unrenderable (size/charset/IO). Fail to "" (no image), never up.
+      // (Exactly these two checked exceptions — SpotBugs REC_CATCH_EXCEPTION
+      // forbids the broad catch Exception here; nothing else in this block
+      // is checked.)
+      return "";
+    }
+  }
+
+  /**
+   * The decision of {@code postEnrollConfirm}: does this (seed, code) pair
+   * commit? A tiny public record so the IT and the unit test assert the
+   * SAME contract object the endpoint returns.
+   */
+  public static final class EnrollDecision {
+    private final String error; // null on success
+    EnrollDecision(String error) {
+      this.error = error;
+    }
+    /** @return the stable error string, or null when the commit succeeded. */
+    public String error() {
+      return error;
+    }
+  }
+
+  /**
+   * Decide + perform the single-POST enrolment commit (plan Task 9 "the
+   * single-POST commit — no pre-commit staging").
+   *
+   * <p>GIVEN a property, a presented Base32 seed, a presented 6-digit code,
+   * an instant, and the configured ±window WHEN decided THEN exactly one of:
+   * <ul>
+   *   <li>seed is blank or not valid Base32 (odd length, or a character
+   *       outside the A–Z2–7 alphabet) → {@code invalid_seed}, property
+   *       untouched;</li>
+   *   <li>seed valid but the code does not verify against that seed within
+   *       the window → {@code wrong_code} ({@link
+   *       VerifyOutcome#ERR_WRONG_CODE}), property untouched — including
+   *       the case where the property already has a DIFFERENT working seed:
+   *       a failed confirm of a regenerate-candidate must not clobber the
+   *       factor the user can actually prove;</li>
+   *   <li>code verifies → the seed (EXACTLY the presented canonical form —
+   *       the same string the QR was built from, so app and server agree)
+   *       is written to the property's TOTP secret, decision is
+   *       success (null error).</li>
+   * </ul>
+   * Nothing is written before the code is proven: the seed is
+   * user-controllable JSON; only a live code for that seed is the credential
+   * that makes it safe to store. The write happens IN THIS method (so the
+   * caller's single {@code u.save()} persists it — same seam pattern as
+   * {@link #ensureEmailCodeSecret}); the caller still owns the save and the
+   * rate-limiting.
+   *
+   * <p>WHY/SOLVES: this is the enrolment's trust anchor. Committing before
+   * verifying would let a session-holder pin a factor they cannot prove
+   * (gate passes, factor useless); letting a failed confirm clobber an
+   * enrolled seed is a self-inflicted lockout ("typed a wrong code while
+   * testing a new phone" → old phone's factor gone).
+   */
+  static EnrollDecision confirmEnrollDecision(MfaUserProperty p, String seed, String code,
+      long now, int window) {
+    if (seed == null || !seed.matches("[A-Z2-7]{8,}")) {
+      // Canonical unpadded Base32: whole 5-bit groups (length multiple of 8
+      // for unpadded) or, for odd-bit counts that our generator never
+      // produces, at least one group — but ONLY the alphabet + no padding
+      // characters. Anything else (space, '=', lowercase, unicode) is "not
+      // a seed", not a 500.
+      return new EnrollDecision(ERR_INVALID_SEED);
+    }
+    byte[] key;
+    try {
+      key = Totp.decodeSecret(seed);
+    } catch (RuntimeException e) {
+      return new EnrollDecision(ERR_INVALID_SEED);
+    }
+    if (!Totp.verify(key, code, now, window)) {
+      return new EnrollDecision(VerifyOutcome.ERR_WRONG_CODE);
+    }
+    p.setTotpSecret(Secret.fromString(seed));
+    return new EnrollDecision(null);
   }
 
   /**

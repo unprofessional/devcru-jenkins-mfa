@@ -615,6 +615,10 @@ Auth in tests: use the crumb — `CrumbIssuer.get(req).issueFor(Jenkins.ANONYMOU
 
 ### Task 9: User-facing factor management page (security profile)
 
+**LANDED 2026-08-19** (six endpoints + section view + `MfaProfileIT` green on
+a booted Jenkins; A7/A8/A2 wired; A22 boundary documented — see the Task 9
+handoff in `docs/todo/` for deviations and the TECH_DEBT A22 note).
+
 **Objective:** Enroll/disable factors from **Manage account → Security**, with
 QR (zxing) — this replaces the old plugin's paywalled UI.
 
