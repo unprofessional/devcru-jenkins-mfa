@@ -55,6 +55,27 @@ import org.sebcru.mfa.crypto.Totp;
  * {@code config.jelly} path, case (a) turns red on the assertion that the
  * {@code <div id="mfaSection">} marker actually appears in core's security page
  * HTML — the one thing the wrong path leaves out.
+ *
+ * <p><b>A23 (2026-08-20, external review — CRITICAL):</b> case (e) was
+ * written FIRST, before any guard existed, and fired red against the
+ * live product on all six endpoints — the gate's {@code /mfa}
+ * allow-list passed an enrolled-unverified session through to
+ * {@code postEnroll}, {@code postEnrollConfirm}, {@code postEmailTestCode},
+ * {@code postDisableTotp}, {@code postDisableEmail} and
+ * {@code postRevokeTrust}, and every one of them answered 200 (per the
+ * review: "successfully POSTs all six endpoints with 200s"); the red run
+ * also proves the factor-strip chain live, because the first two
+ * disables execute their writes before the assertion fails. The red
+ * phase is the attack chain itself: case (e) also asserts the victim's
+ * factor state is byte-identical after the POSTs, which is the property
+ * the {@code postDisableTotp}+{@code postDisableEmail} pair destroys.
+ * Green landed with the {@code managementAllowed} seam + the 403 glue
+ * on all six endpoints (TECH_DEBT A23; the urgent handoff, now in
+ * {@code docs/done/}). Case (d) was reworked in the same red phase: its
+ * pre-verify shape pinned the hole as intended behaviour, so the routing
+ * guard now runs from a MFA-verified session (proving the factor first,
+ * the natural flow). Case (b)'s phase-2 re-enrolment sits behind the
+ * same guard and needed the same verified-session flow.
  */
 @WithJenkins
 class MfaProfileIT {
@@ -213,6 +234,12 @@ class MfaProfileIT {
 
     // -- Phase 2: an ALREADY-working user tries a second phone with a WRONG
     //    code for a fresh candidate seed. It must NOT clobber the working one.
+    // A23: the phase-1 confirm committed the seed but did NOT verify the
+    // session (postEnrollConfirm sets no session flag), so after this point
+    // the session is enrolled-unverified — and the management guard denies
+    // it. Prove the factor (natural self-service flow) before the
+    // re-enrolment round trip.
+    verifyTotpToPassGate(c, base, user, seed, "/job/it-prof2-job/");
     JSONObject gen2 = postMfaProfile(c, base, "postEnroll", crumb);
     assertTrue(gen2.optBoolean("ok"), "a regenerate must succeed: " + gen2);
     String candidate = gen2.optString("seed");
@@ -357,13 +384,20 @@ class MfaProfileIT {
 
   /**
    * WHAT: all six profile endpoints are routed and answer (200), not 404 —
-   * the A20 boot guard. A {@code @RequirePOST}-only method (no
-   * {@code @WebMethod}) 404s on this Stapler, so a 200 here is proof each
-   * carries its routing token on a live instance.
+   * the A20 boot guard, run from a MFA-verified session (A23 rework,
+   * 2026-08-20: the previous draft ran from a gated-unverified session and
+   * thereby pinned the authorization hole the external review found — see
+   * the class red→green history; the guard must prove the factor first, the
+   * natural self-service flow login → verify → manage). A
+   * {@code @RequirePOST}-only method (no {@code @WebMethod}) 404s on this
+   * Stapler, so a 200 here is proof each carries its routing token on a live
+   * instance.
    *
    * <p>BDD:
    * <pre>
-   * GIVEN a logged-in enrolled user with a security-page crumb
+   * GIVEN a logged-in enrolled user who has PROVEN the TOTP factor (verified
+   *       session, no remembered trust recorded beforehand — the verified
+   *       flag alone is what authorises the management endpoints)
    * WHEN  each of postEnroll / postEnrollConfirm / postEmailTestCode /
    *       postDisableTotp / postDisableEmail / postRevokeTrust is POSTed
    * THEN  every one answers status 200 (a JSON envelope), never 404
@@ -373,13 +407,15 @@ class MfaProfileIT {
    * unroutable until a booted 404 caught them — the annotation alone does
    * nothing; only @WebMethod routes. This is the standing guard that all six
    * of Task 9's endpoints actually resolve on a booted Jenkins, so the
-   * section's buttons can never be silently dead.
+   * section's buttons can never be silently dead — for the session that is
+   * ALLOWED to use them.
    */
   @Test
   void allSixProfileEndpointsAreRoutedNot404(JenkinsRule rule) throws Exception {
     String user = "it-prof-404";
     String pw = "secret123";
-    enrollTotp(user, pw, Totp.newBase32Secret());
+    String secret = Totp.newBase32Secret();
+    enrollTotp(user, pw, secret);
     rule.createProject(FreeStyleProject.class, "it-prof4-job");
     URL base = rule.getURL();
 
@@ -387,6 +423,10 @@ class MfaProfileIT {
     c.setJavaScriptEnabled(false);
     c.setThrowExceptionOnFailingStatusCode(false);
     c.login(user, pw);
+    // A23: prove the factor first — the management endpoints authorise on
+    // the verified session (or remembered trust), never on the password
+    // alone. verifyTotpToPassGate sets the session flag.
+    verifyTotpToPassGate(c, base, user, secret, "/job/it-prof4-job/");
     String crumb = securityPageCrumb(c, base, user);
 
     String[] endpoints = {"postEnroll", "postEnrollConfirm", "postEmailTestCode",
@@ -411,6 +451,148 @@ class MfaProfileIT {
       assertTrue(body.contains("\"ok\""),
           "endpoint " + ep + " must answer a JSON {ok...} envelope: " + head(body));
     }
+  }
+
+  // ==================================================================
+  // Case e — the A23 attack chain: an enrolled, GATED, UNVERIFIED session
+  //   (password only) must get 403 from ALL SIX management endpoints, and
+  //   the victim's factor state must be byte-identical afterwards.
+  // ==================================================================
+
+  /**
+   * WHAT: the security fix for A23 (external review, 2026-08-19/20 — CRITICAL),
+   * pinned at the wire. A session that has proved ONLY the password — enrolled,
+   * bounced to the MFA page, never verified a second factor, no remembered
+   * trust — is the exact session the gate's {@code /mfa} allow-list hands to
+   * the six management endpoints. Every one of the six must answer
+   * HTTP 403 {@code {ok:false, error:"verification_required"}}, and the
+   * victim's factor state must be EXACTLY unchanged afterwards (the
+   * factor-stripping attack is the pair {@code postDisableTotp} +
+   * {@code postDisableEmail}; the seed-swap attack is
+   * {@code postEnrollConfirm} — both dead against 403 + unchanged state).
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN an enrolled user (a TOTP factor AND a registered email) with NO
+   *       remembered trust (trustedUntilMs 0), logged in with the password
+   *       ONLY — the session is gated-unverified (no VERIFIED_ATTR), the
+   *       shape the gate bounces to /mfa
+   * WHEN  each of the six management endpoints is POSTed from that session
+   *       (with a valid crumb, the /crumbIssuer allow-list makes them
+   *       obtainable pre-verify — the attack needs no extra privilege)
+   * THEN  every one answers HTTP 403 with {ok:false,
+   *       error:"verification_required"} — no 200, no state mutation
+   * AND   after postDisableTotp + postDisableEmail the victim's
+   *       hasTotpFactor() / hasEmailFactor() / registered email / per-user
+   *       mail key / totp secret are byte-identical to before (attack
+   *       chain 1 — factor stripping — is closed)
+   * AND   a postEnrollConfirm with the attacker's OWN candidate seed + a
+   *       guessed code never reaches the commit path: the victim's seed is
+   *       still their own (attack chain 2 — seed swap — is closed at the
+   *       door, before confirmEnrollDecision is even reached)
+   * </pre>
+   *
+   * <p>WHY/SOLVES: this is the audit finding pinned as behaviour. Without the
+   * guard, case (e) is red on all six endpoints (each answers 200 — the
+   * review's "successfully POSTs all six endpoints with 200s"), and the
+   * factor-state assertions are red on both disable endpoints: the
+   * attacker's two requests wipe both factors, {@code isMfaEnabled()} goes
+   * false, the next request passes the gate — MFA defeated entirely against
+   * the password-only threat model it exists for, and the README's "no
+   * self-service reset, by design" becomes a lie. The 403 (not a silent
+   * no-op 200) also keeps the UI's error path reachable: the section's JS
+   * maps {@code verification_required} to a user-visible message and can
+   * tell the user to complete verification first.
+   */
+  @Test
+  void gatedUnverifiedSessionGets403FromAllSixAndTheFactorStateIsUntouched(JenkinsRule rule) throws Exception {
+    String user = "it-prof-a23";
+    String pw = "secret123";
+    String mail = user + "@devcru.example";
+    String victimSecret = Totp.newBase32Secret();
+    User u = enrollTotp(user, pw, victimSecret);
+    MfaUserProperty p0 = MfaUserProperty.getOrCreate(u);
+    p0.setRegisteredEmail(mail);
+    // NO trust record — trustedUntilMs defaults to 0, so the only credential
+    // this session holds after login is the password itself.
+    u.save();
+    rule.createProject(FreeStyleProject.class, "it-prof5-job");
+    URL base = rule.getURL();
+
+    // Prove the pre-state (what the attacker must leave untouched).
+    MfaUserProperty before = User.getById(user, true).getProperty(MfaUserProperty.class);
+    assertTrue(before.hasTotpFactor(), "precondition: the victim has a TOTP factor");
+    assertTrue(before.hasEmailFactor(), "precondition: the victim has the email factor");
+    assertEquals(victimSecret, before.getTotpSecret().getPlainText());
+    assertEquals(mail, before.getRegisteredEmail());
+    long trustedBefore = before.getTrustedUntilMs();
+    int streakBefore = before.getFailedAttemptStreak();
+
+    // The attacker's session: password login, nothing else. The gate bounces
+    // every gated GET to /mfa, but /mfa/* and /crumbIssuer are allow-listed —
+    // exactly why this attack needs nothing but the password + a crumb.
+    JenkinsRule.WebClient c = rule.createWebClient();
+    c.setJavaScriptEnabled(false);
+    c.setThrowExceptionOnFailingStatusCode(false);
+    c.login(user, pw);
+    // The gate must actually be gating this session — sanity: a gated GET of
+    // the security page 302s to /mfa (not 200). This asserts the test shape
+    // IS the gated-unverified shape, so the 403s below are meaningful.
+    WebResponse gateResp = rawGet(c, base, securityPath(user));
+    assertEquals(302, gateResp.getStatusCode(),
+        "precondition: an enrolled, unverified session must be gated (302 to the MFA page)");
+    assertTrue(gateResp.getResponseHeaderValue("Location").contains("/mfa"),
+        "the gate bounce must target the MFA page: " + gateResp.getResponseHeaderValue("Location"));
+
+    String crumb = mfaCrumb(c, base);
+    String[] endpoints = {"postEnroll", "postEnrollConfirm", "postEmailTestCode",
+        "postDisableTotp", "postDisableEmail", "postRevokeTrust"};
+    for (String ep : endpoints) {
+      WebRequest req = new WebRequest(href(base, "mfa/" + ep), HttpMethod.POST);
+      List<NameValuePair> params = new ArrayList<>();
+      params.add(new NameValuePair(crumbName, crumb));
+      // The seed-swap shape for postEnrollConfirm: the attacker's OWN
+      // candidate seed + a guessed code. (The real brute force tries ~333K
+      // codes; one POST proves the door — the 403 must precede any commit
+      // logic, so a guessed code cannot commit.)
+      params.add(new NameValuePair("seed", "ABCDEFGHIJKLMNOP"));
+      params.add(new NameValuePair("code", "000000"));
+      req.setRequestParameters(params);
+      WebResponse resp;
+      try {
+        resp = c.loadWebResponse(req);
+      } catch (FailingHttpStatusCodeException e) {
+        resp = e.getResponse();
+      }
+      assertEquals(403, resp.getStatusCode(),
+          "a gated-unverified session must get 403 from " + ep
+              + " (A23: the password holder alone must not manage factors); got "
+              + resp.getStatusCode() + ": " + head(resp.getContentAsString()));
+      String body = resp.getContentAsString();
+      assertNotNull(body, "the 403 body must carry the stable JSON contract");
+      JSONObject j = JSONObject.fromObject(body);
+      assertFalse(j.optBoolean("ok"),
+          "the " + ep + " 403 must be {ok:false}: " + head(body));
+      assertEquals(VerifyOutcome.ERR_VERIFICATION_REQUIRED, j.optString("error"),
+          "the " + ep + " 403 must carry the stable reason verification_required: " + head(body));
+    }
+
+    // The attack chains, asserted on the persisted state: factor stripping
+    // (both disables above) and seed swap (the confirm above) must have
+    // changed NOTHING — byte-identical factor state, trust, and telemetry.
+    MfaUserProperty after = User.getById(user, true).getProperty(MfaUserProperty.class);
+    assertTrue(after.hasTotpFactor(),
+        "attack chain 1: postDisableTotp from a password-only session must NOT strip the TOTP factor");
+    assertTrue(after.hasEmailFactor(),
+        "attack chain 1: postDisableEmail from a password-only session must NOT strip the email factor");
+    assertEquals(victimSecret, after.getTotpSecret().getPlainText(),
+        "attack chain 2: postEnrollConfirm from a password-only session must NOT swap the seed");
+    assertEquals(mail, after.getRegisteredEmail(),
+        "the registered mailbox is untouched by the denied attack");
+    assertEquals(trustedBefore, after.getTrustedUntilMs(),
+        "the trust record is untouched (postRevokeTrust was denied)");
+    assertEquals(streakBefore, after.getFailedAttemptStreak(),
+        "no telemetry side effects from a denied request");
   }
 
   // ==================================================================

@@ -485,20 +485,36 @@ public class MfaController implements RootAction {
   }
 
   // ---------------------------------------------------------------------
-  // Task 9 — the profile-page factor-management endpoints (six). All run
-  // on the SAME gate as postVerify/postResendEmail: an enrolled user who
-  // has not yet proven a factor this session is bounced by the gate
-  // before any of them; API-token requests (Basic AND A21 Bearer) are
-  // exempt from the gate here exactly as everywhere else. The section
-  // itself renders on Manage account → Security (core action); these
-  // endpoints are where the section's buttons land.
+  // Task 9 — the profile-page factor-management endpoints (six).
+  //
+  // AUTHORIZATION (A23 — mads-directed fix, 2026-08-20; do NOT
+  // "simplify" this away): the gate's "/mfa" allow-list exists so a
+  // gated-unverified session can reach postVerify/postResendEmail, and
+  // that same prefix passes ALL SIX of these endpoints to a session that
+  // has proved ONLY the password (crumbs are obtainable too — /crumbIssuer
+  // is allow-listed). The external review (2026-08-19) found the two
+  // attack chains that opens: factor stripping (postDisableTotp +
+  // postDisableEmail wipe both factors, isMfaEnabled() flips false, the
+  // gate passes the session — MFA defeated) and the unthrottled seed-swap
+  // brute force through postEnrollConfirm. Every endpoint below therefore
+  // runs the PURE seam {@link #managementAllowed} at its top, BEFORE any
+  // state mutation: deny 403 verification_required when the user is
+  // enrolled and has NEITHER verified this session NOR holds live
+  // remembered trust (an attacker with only the password has neither —
+  // trust is granted by a prior successful verify, the flag by postVerify).
+  // Unenrolled users pass (they are passed by the gate itself and must
+  // keep self-enrolment access). API-token requests (Basic AND A21
+  // Bearer) remain exempt from the gate itself exactly as everywhere
+  // else; whether they carry the management authority depends on the
+  // user's own verified/trust state (flagged in the A23 fix commit).
   //
   // URL ROUTING (A20, same rule as postVerify/postResendEmail — non-
   // negotiable per endpoint, landed in this commit with the method):
   // @RequirePOST is policy, not routing. Every one of the six carries
   // @WebMethod(name = "…") or <ctx>/mfa/<token> 404s and the section's
-  // buttons are dead. MfaProfileIT's six-endpoint 404 guard is the boot
-  // proof for all of them, A20-style.
+  // buttons are dead. MfaProfileIT's six-endpoint 404 guard (now run
+  // from a VERIFIED session, A23) is the boot proof for all of them, A20-
+  // style.
   // ---------------------------------------------------------------------
 
   /**
@@ -517,6 +533,10 @@ public class MfaController implements RootAction {
   @RequirePOST
   @WebMethod(name = "postEnroll")
   public void postEnroll(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    // A23: the guard runs FIRST, before any state (or seed) is produced.
+    if (answerManagementDeniedIfUnverified(req, rsp)) {
+      return;
+    }
     User u = currentUser();
     if (u == null) {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
@@ -549,15 +569,25 @@ public class MfaController implements RootAction {
    * failure {@code {ok:false, error:"invalid_seed"|"wrong_code"}}
    * — the presented seed is NEVER committed on a failed confirm, so a wrong
    * code while testing a second phone cannot clobber the working factor.
-   * No rate limit here: the candidate seed is in the user's own form and an
-   * unverified code proves nothing (there is nothing to brute — the seed is
-   * the key, the code is derived, and 10⁶ guesses per presented seed burn
-   * only the presenter's own patience; the gate-side limiter bounds the
-   * login path, which is where the account is defended).
+   * No rate limit on the CODE itself: the candidate seed is in the
+   * user's own form and an unverified code proves nothing (the seed is
+   * the key, the code is derived). The PRE-FIX framing — "10⁶ guesses
+   * per presented seed burn only the presenter's own patience" — assumed
+   * the presenter is the owner; the 2026-08-19 review showed a
+   * password-only attacker can present their OWN seed and brute-force it
+   * (~333K attempts for 50%, no throttle). The A23 guard above removes
+   * that pre-verify door: only a session that has already proved a
+   * factor (or holds live trust) may reach the commit path at all, which
+   * is what makes the absent per-code throttle safe.
    */
   @RequirePOST
   @WebMethod(name = "postEnrollConfirm")
   public void postEnrollConfirm(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    // A23: guard FIRST — the commit path (confirmEnrollDecision writes the
+    // seed) must be unreachable to a password-only session.
+    if (answerManagementDeniedIfUnverified(req, rsp)) {
+      return;
+    }
     User u = currentUser();
     if (u == null) {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
@@ -603,6 +633,11 @@ public class MfaController implements RootAction {
   @RequirePOST
   @WebMethod(name = "postEmailTestCode")
   public void postEmailTestCode(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    // A23: guard FIRST — the send path (ensureEmailCodeSecret + sendEmailCode)
+    // must be unreachable to a password-only session.
+    if (answerManagementDeniedIfUnverified(req, rsp)) {
+      return;
+    }
     User u = currentUser();
     if (u == null) {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
@@ -659,14 +694,26 @@ public class MfaController implements RootAction {
    * <p>WHY/SOLVES: self-service removal is the user's recovery lever
    * (lost phone → admin recovery path, plan decision 7, clears the WHOLE
    * property; this removes ONE factor). It is deliberately NOT confirmed
-   * with a second factor: the caller already sits behind the gate
-   * (password + second factor already proven this session) or is an
-   * API-token request — an enrolled, gated, unverified session cannot
-   * reach this endpoint at all.
+   * with a second factor, because the A23 guard (this commit) is the real
+   * protection: the endpoint answers 403 {@code verification_required}
+   * unless the session has verified a factor this login ({@code
+   * VERIFIED_ATTR}) or holds live remembered trust — an enrolled, GATED,
+   * UNVERIFIED session (password only, the exact threat MFA exists for)
+   * cannot reach the write at all. (The pre-fix javadoc here claimed the
+   * GATE alone blocked such a session; that was false — the gate's
+   * {@code /mfa} allow-list passed every management endpoint through,
+   * which is precisely the hole the attack-chain IT in MfaProfileIT now
+   * pins closed.)
    */
   @RequirePOST
   @WebMethod(name = "postDisableTotp")
   public void postDisableTotp(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    // A23: guard FIRST — this endpoint is the factor-strip half of the
+    // audit's attack chain 1; the write must be unreachable to a
+    // password-only session.
+    if (answerManagementDeniedIfUnverified(req, rsp)) {
+      return;
+    }
     User u = currentUser();
     if (u == null) {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
@@ -701,6 +748,12 @@ public class MfaController implements RootAction {
   @RequirePOST
   @WebMethod(name = "postDisableEmail")
   public void postDisableEmail(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
+    // A23: guard FIRST — the second factor-strip half of the audit's
+    // attack chain 1; the write must be unreachable to a password-only
+    // session.
+    if (answerManagementDeniedIfUnverified(req, rsp)) {
+      return;
+    }
     User u = currentUser();
     if (u == null) {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
@@ -741,6 +794,13 @@ public class MfaController implements RootAction {
     User u = currentUser();
     if (u == null) {
       write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_NOT_AUTHENTICATED));
+      return;
+    }
+    // A23: guard before the trust write — revoking remembered devices is a
+    // state mutation; the revocation must not run and must not even load-
+    //touch the property for a password-only session (its trust record must
+    // be byte-identical to the moment before the denied POST).
+    if (answerManagementDeniedIfUnverified(req, rsp)) {
       return;
     }
     MfaUserProperty p;
@@ -915,6 +975,113 @@ public class MfaController implements RootAction {
   // thin glue around these; the decisions themselves live here so they are
   // pinable in a plain JVM (MfaProfileSeamTest) before any boot.
   // =====================================================================
+
+  /**
+   * The A23 authorization decision for the six factor-management
+   * endpoints (postEnroll, postEnrollConfirm, postEmailTestCode,
+   * postDisableTotp, postDisableEmail, postRevokeTrust): MAY this session
+   * manage factors?
+   *
+   * <p>The gate's {@code /mfa} allow-list exists so a gated-unverified
+   * session can reach {@code postVerify} — and with {@code startsWith}
+   * matching it passes EVERY path under {@code /mfa}, including all six
+   * management endpoints, to a session that has proved ONLY the password
+   * (TECH_DEBT A23, external review 2026-08-19). The gate is therefore
+   * NOT the protection these endpoints rely on; this seam is.
+   *
+   * <p>GIVEN the user's enrollment, whether THIS session has verified a
+   * factor ({@code VERIFIED_ATTR}, the same attribute the gate reads), and
+   * whether the user holds live remembered trust WHEN decided THEN:
+   * <ul>
+   *   <li>unenrolled → ALLOW (the gate passes unenrolled users outright;
+   *       they must keep self-enrolment access and their sessions never
+   *       carry the flag, so the flag alone would lock them out of the
+   *       enrolment UI);</li>
+   *   <li>enrolled + verified this session → ALLOW (the natural
+   *       self-service flow: login → verify → manage);</li>
+   *   <li>enrolled + unverified but remembered trust live → ALLOW (a
+   *       trusted-device login already proved a factor within the trust
+   *       window — without this clause the guard would break the
+   *       legitimate disable/re-enrol flow from a remembered browser);</li>
+   *   <li>enrolled + unverified + no trust → DENY 403
+   *       {@code verification_required}. The password-only attacker holds
+   *       exactly this state, and neither instrument can be forged by it:
+   *       the flag is set only by postVerify success, {@code
+   *       trustedUntilMs} only by a prior successful verify's trust grant.</li>
+   * </ul>
+   *
+   * <p>WHY/SOLVES: without this guard, CRITICAL-1 (factor stripping) is two
+   * requests — POST the two disables, both factors wipe,
+   * {@code isMfaEnabled()} is false, the gate passes the session: MFA is
+   * defeated against the exact threat (password compromise) it exists for,
+   * and the README's "no self-service reset, by design" is false. CRITICAL-2
+   * (seed-swap brute force: the attacker's OWN seed + guessed codes, ~333K
+   * attempts expected) commits through the same door. The seam is pure and
+   * unit-pinned (MfaProfileSeamTest) exactly so this decision cannot
+   * regress; the endpoints apply it BEFORE any state mutation — a denied
+   * request touches nothing.
+   *
+   * @param enrolled        whether the user has at least one factor (the
+   *                        gate's own {@code isMfaEnabled()} predicate)
+   * @param sessionVerified the session carries {@link #VERIFIED_ATTR}
+   * @param trustLive       {@code trustedUntilMs > now} at request time
+   *                        (the same trust arithmetic the gate uses)
+   * @return true iff the management endpoints may proceed
+   */
+  static boolean managementAllowed(boolean enrolled, boolean sessionVerified, boolean trustLive) {
+    if (!enrolled) {
+      return true;
+    }
+    return sessionVerified || trustLive;
+  }
+
+  /**
+   * The four-line endpoint glue around {@link #managementAllowed}: compute
+   * the three inputs off the live request (READ-ONLY on the property —
+   * never {@code getOrCreate} on this path, the gate's hot-path rule) and,
+   * on deny, answer the stable 403 contract and report "stop" so the
+   * endpoint returns BEFORE any state mutation.
+   *
+   * <p>The 403 (not a silent no-op 200) is deliberate: the section's JS
+   * maps {@code verification_required} to a user-visible "complete
+   * verification first" state, and a 200-from-a-denied-request is exactly
+   * the shape the audit's pinned test (case e) exists to catch.
+   *
+   * @return true iff the endpoint must answer 403 and return (deny);
+   *         false iff it may proceed (allow)
+   */
+  private boolean answerManagementDeniedIfUnverified(StaplerRequest2 req,
+      StaplerResponse2 rsp) throws IOException {
+    User u = currentUser();
+    if (u == null) {
+      // The endpoints themselves answer not_authenticated; the guard hands
+      // the not-logged-in shape back to them (nothing to authorise).
+      return false;
+    }
+    DevcruMfaConfig cfg = DevcruMfaConfig.currentSafe();
+    MfaUserProperty prop;
+    try {
+      prop = u.getProperty(MfaUserProperty.class);
+    } catch (RuntimeException e) {
+      prop = null;
+    }
+    boolean enrolled = prop != null && prop.isMfaEnabled();
+    HttpSession session = req.getSession(false);
+    boolean sessionVerified = session != null
+        && Boolean.TRUE.equals(session.getAttribute(VERIFIED_ATTR));
+    boolean trustLive = prop != null && trustStore.isTrusted(prop, cfg, System.currentTimeMillis());
+    if (managementAllowed(enrolled, sessionVerified, trustLive)) {
+      return false;
+    }
+    rsp.setStatus(403);
+    rsp.setHeader("Content-Type", "application/json;charset=UTF-8");
+    rsp.setHeader("Cache-Control", "no-store");
+    rsp.setHeader("X-Content-Type-Options", "nosniff");
+    PrintWriter w = rsp.getWriter();
+    w.print(VerifyOutcome.fail(VerifyOutcome.ERR_VERIFICATION_REQUIRED).toJSONObject().toString());
+    w.flush();
+    return true;
+  }
 
   /** Stable reason for {@link #confirmEnrollDecision} when the seed is not usable Base32. */
   public static final String ERR_INVALID_SEED = "invalid_seed";

@@ -31,17 +31,29 @@ import org.kohsuke.stapler.StaplerRequest2;
  *
  * <h2>Data-binding scope (a deliberate refinement of the plan)</h2>
  * <p>The plan suggested {@code @DataBoundSetter} on every field. That was
- * narrowed to the two <em>user-facing factor</em> fields only
- * ({@link #setTotpSecret}, {@link #setRegisteredEmail}). The remaining
- * fields ({@code trustedUntilMs}, {@code lastVerifiedFactor},
- * {@code failedAttemptStreak}, and the email-code state
- * {@code pendingCodeHash}/{@code codeIssuedAt}/{@code lastResendAt}) are
- * <strong>server-managed</strong> trust / telemetry / secret state: if they
- * were data-bound, the user's security-profile form could forge a 30-day
- * trust expiry, zero out the attempt counter, or submit a crafted pending
- * hash. They are exposed as plain getters/setters for the gate, the
- * RateLimiter, and {@code EmailCodeIssuer} to use, but are not reachable
- * from form binding.
+ * narrowed to the ONE <em>user-facing factor</em> field that config
+ * binding is safe for: {@link #setRegisteredEmail} (a delivery address,
+ * bound by core's {@code configSubmit}). {@code trustedUntilMs},
+ * {@code lastVerifiedFactor}, {@code failedAttemptStreak}, and the
+ * email-code state ({@code pendingCodeHash}/{@code codeIssuedAt}/
+ * {@code lastResendAt}) are <strong>server-managed</strong> trust /
+ * telemetry / secret state: if they were data-bound, the user's
+ * security-profile form could forge a 30-day trust expiry, zero out the
+ * attempt counter, or submit a crafted pending hash. They are exposed as
+ * plain getters/setters for the gate, the RateLimiter, and
+ * {@code EmailCodeIssuer} to use, but are not reachable
+ * by form binding.
+ *
+ * <p><strong>The TOTP seed is NOT data-bound at all (A23 fix, 2026-08-20).</strong>
+ * {@link #setTotpSecret} used to carry {@code @DataBoundSetter}; that was
+ * removed. The seed is committed by exactly one path —
+ * {@code MfaController.postEnrollConfirm} through the
+ * {@code confirmEnrollDecision} seam, after the candidate code is proven —
+ * and config binding (core's {@code configSubmit}, which binds a user's
+ * security section) would otherwise be a second, code-less,
+ * gate-exempt path for writing a TOTP seed. With the setter as a plain
+ * method, the enrolment/confirm path is the ONLY writer, by construction,
+ * not by convention.
  */
 public class MfaUserProperty extends UserProperty {
 
@@ -113,7 +125,14 @@ public class MfaUserProperty extends UserProperty {
     return totpSecret;
   }
 
-  @DataBoundSetter
+  /**
+   * A23: NOT {@code @DataBoundSetter} — deliberately removed 2026-08-20.
+   * The only caller that writes the seed is
+   * {@code MfaController.confirmEnrollDecision} (via the
+   * {@code postEnrollConfirm} endpoint, after the candidate code is
+   * proven). See the class-level "Data-binding scope" note for why config
+   * binding is not allowed to write a TOTP seed.
+   */
   public void setTotpSecret(Secret totpSecret) {
     this.totpSecret = totpSecret;
   }
