@@ -229,7 +229,11 @@ class FilterLogicTest {
     private static final Object[] ALLOWED = {"/login", "/j_acegi_securityCheck",
         "/mfa", "/images/logo.png",
         "/static/2.528/js/core.js", "/scripts/something.js", "/css/theme.css",
-        "/adjuncts/123/xyz", "/logout"};
+        "/adjuncts/123/xyz", "/logout",
+        // Live incident round 4: the gate's own JS rides /plugin/devcru-mfa/;
+        // gating it 302s the script to the gate page (text/html) and Chrome
+        // refuses to execute it — the Verify button is dead, self-lockout.
+        "/plugin/devcru-mfa/mfa-gate.js"};
 
     @Test
     void loginFlowAndStaticAssetsPass() {
@@ -244,7 +248,10 @@ class FilterLogicTest {
     @Test
     void protectedPathsRedirect() {
       for (String path : new String[]{"/", "/job/web/", "/user/mads",
-          "/configure", "/about"}) {
+          "/configure", "/about",
+          // round 4 scope pin: ONLY devcru-mfa's own assets are ungated —
+          // other plugins' static paths stay behind the gate.
+          "/plugin/some-other-plugin/script.js"}) {
         assertEquals(MfaFilterDecision.REDIRECT,
             MfaFilter.decision(Policy.REQUIRED,
                 false, false, false, false, false, path, false),
