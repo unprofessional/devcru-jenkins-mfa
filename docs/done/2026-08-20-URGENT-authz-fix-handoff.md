@@ -1,5 +1,27 @@
 # 🚨 URGENT — authorization fix handoff (blocks Task 10)
 
+> ## ✅ LANDED / RESOLVED (this commit, 2026-08-20)
+> The A23 fix is green and this handoff is stamped and archived per its own
+> §5 same-commit rule. Red→green was honest (house rule): the new
+> `MfaProfileIT.gatedUnverifiedSessionGets403FromAllSixAndTheFactorStateIsUntouched`
+> was written first, ran RED against the live product on all six endpoints
+> (each answered 200 to a password-only session), then green with the fix.
+> What landed: the pure `MfaController.managementAllowed(enrolled,
+> sessionVerified, trustLive)` seam + 403 `verification_required` glue at the
+> top of all six management endpoints (deny-before-mutation), the mads-
+> mandated `setTotpSecret` `@DataBoundSetter` removal (the seed is now only
+> committable via `postEnrollConfirm`), the rewritten false javadoc on
+> `postDisableTotp`/`postEnrollConfirm`, the reworked
+> `allSixProfileEndpointsAreRoutedNot404` (now run from a verified session)
+> and case (b)'s verified phase-2, and the all-four-quadrants unit pin in
+> `MfaProfileSeamTest`. The attack-chain IT asserts the victim's factor state
+> is byte-identical after the denied POSTs. Full gate: `mvn -B -ntp clean
+> verify` green, SpotBugs 0. **Task 10 is unblocked** — pick up
+> `docs/todo/2026-08-19-task10-handoff.md` for the deploy (its
+> BLOCKED banner was lifted in the same commit).
+>
+> ---
+
 **Written 2026-08-20 by Moldy** (external security review, mads-directed).
 **Priority: URGENT. Nothing else — including Task 10 — proceeds until this
 fix lands and is green.**
@@ -170,7 +192,7 @@ mads rules on them separately:
 5. False javadoc fixed; TECH_DEBT A23 resolved; this handoff stamped and
    moved to `docs/done/`.
 6. **Then** — and only then — pick up
-   `docs/todo/2026-08-19-task10-handoff-BLOCKED.md` for the deploy.
+   `docs/todo/2026-08-19-task10-handoff.md` for the deploy.
 
 ---
 

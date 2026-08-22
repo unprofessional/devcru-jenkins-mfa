@@ -178,8 +178,9 @@ every property carries `0` (implies TOTP) even for email-only users.
 ## OPEN — no ruling yet
 
 ### A23 — CRITICAL (external review): gate allow-list passes all six management endpoints to password-only sessions
-**Status: OPEN — fix is mads-directed and URGENT; owner: `docs/todo/
-2026-08-20-URGENT-authz-fix-handoff.md`. Task 10 (deploy) is BLOCKED on it.**
+**Status: RESOLVED (2026-08-20 — mads-directed urgent fix, red→green).**
+**Owner: this commit (guard seam + six-endpoint glue + hardened binding + the
+attack-chain IT). Task 10 (deploy) is UNBLOCKED once this lands green.**
 
 Found by Moldy's external security review (2026-08-19; full record in
 Moldy's workspace `reviews/jenkins-mfa/REVIEW-2026-08-19.md`).
@@ -220,6 +221,37 @@ EmailCodeIssuer EXPIRED comment/code discrepancy; `registeredEmail`
 binds without mailbox verification. **Ruling recorded (mads, 2026-08-20):**
 the `totpSecret` `@DataBoundSetter` removal is MANDATORY in the A23 fix
 commit (moved into the urgent handoff's required scope).
+
+> **Landed (this commit):** red→green per the house rule — the new
+> `MfaProfileIT.gatedUnverifiedSessionGets403FromAllSixAndTheFactorStateIsUntouched`
+> was written FIRST and ran red against the live product (all six
+> endpoints answered 200 to a password-only session, confirming the
+> finding) before any guard existed. The fix is the pure seam
+> `MfaController.managementAllowed(enrolled, sessionVerified, trustLive)`:
+> unenrolled → allow (fresh users keep self-enrolment — their sessions
+> never carry `VERIFIED_ATTR`); enrolled + verified-this-session
+> (`VERIFIED_ATTR`) → allow; enrolled + unverified + live remembered trust
+> (`trustedUntilMs`) → allow (a trusted-device login already proved a
+> factor); enrolled + unverified + no trust → **deny 403
+> `{ok:false, error:"verification_required"}`** — the password-only
+> attacker's exact state. All six management endpoints (`postEnroll`,
+> `postEnrollConfirm`, `postEmailTestCode`, `postDisableTotp`,
+> `postDisableEmail`, `postRevokeTrust`) run the guard FIRST, before any
+> state mutation, via `answerManagementDeniedIfUnverified`. The mads-
+> mandated hardening landed in the same commit: `MfaUserProperty.
+> setTotpSecret` no longer carries `@DataBoundSetter` (the seed is now
+> committed ONLY via `postEnrollConfirm`/`confirmEnrollDecision`, by
+> construction). `MfaProfileIT.allSixProfileEndpointsAreRoutedNot404` was
+> reworked to run from a verified session (its pre-verify shape had pinned
+> the hole as intended behaviour); case (b)'s phase-2 re-enrolment
+> verifies first for the same reason. The seam is unit-pinned across all
+> four quadrants in `MfaProfileSeamTest.
+> managementAuthorizationAllFourQuadrants`; the false `postDisableTotp` /
+> `postEnrollConfirm` javadoc was rewritten to document the actual guard.
+> The "no self-service reset, by design" README claim is now true: a
+> password-only session cannot strip both factors because the denies are
+> 403-before-mutation and the attack-chain IT asserts the victim's factor
+> state is byte-identical afterwards.
 
 ### A5 — "Back to where you were" resolves to the MFA page, not the pre-login page
 **Status: RESOLVED (Task 8 — the IT assertion landed green).** **Owner: Task 7 (plumbing) + Task 8 (IT assertion).**
@@ -595,6 +627,7 @@ consumer + reset wiring LANDED 2026-08-19 — see the Task 9 handoff in
 | A2 — `emailCodeSecret` never minted; blank-string key | Second minting path (`postEmailTestCode`) now routes through the same `ensureEmailCodeSecret(p)` seam; `postDisableEmail` retires the key on mailbox clear. | Task 9 commit | One mint implementation for both paths; key never outlives its mailbox. |
 | A7 — `failedAttemptStreak` write-only and unbounded | `postVerify` success path resets the streak to 0 on the same `u.save()` as `RateLimiter.clear`; wire-pinned (wrong verify → 1, success → 0). The "UI reads it" hint half did NOT land (documented scope note under A7). | Task 9 commit | The streak is no longer monotonic; a hint remains a 2-line jelly add if ever wanted. |
 | A8 — `lastVerifiedFactor` had no writer | `postVerify` writes the factor that actually PROVED (0=TOTP, 1=email) on success — not the submitted shape; wire-pinned (fabricated 1 overwritten to 0 by a TOTP success). | Task 9 commit | Telemetry field is now truthful; email-proven branch (1) rides the same ternary, exercised by the filter IT's email path. |
+| A23 — gate allow-list exposed all six management endpoints to password-only sessions | Pure seam `MfaController.managementAllowed(enrolled, sessionVerified, trustLive)` + 403 `verification_required` glue at the top of all six endpoints (deny-before-mutation); the mandatory `setTotpSecret` `@DataBoundSetter` removal (seed committed only via `postEnrollConfirm`); false `postDisableTotp`/`postEnrollConfirm` javadoc rewritten (see the A23 entry's "Landed" note). | this commit (urgent fix, 2026-08-20) | Red→green: the attack-chain IT ran red on all six endpoints first. Unenrolled and trusted-device sessions keep management access; a password-only attacker gets 403s and leaves the victim's factor state byte-identical. Task 10 (deploy) unblocked. |
 
 *Move items here with their fixing commit when closed. Keep the resolved
 text intact — this file is the audit trail.*
