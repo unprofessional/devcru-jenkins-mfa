@@ -714,6 +714,16 @@ class MfaProfileIT {
       gatePage = ce.loadWebResponse(new WebRequest(hostAbs(base, loc)));
     }
     assertEquals(200, gatePage.getStatusCode(), "the gate page must render");
+    // Live incident 2026-08-22 round 3: the self-contained gate document shipped
+    // with NO Content-Type header (core pages get theirs from the l:layout/l:view
+    // wrapper this page deliberately doesn't have); with nosniff the browser
+    // rendered raw HTML source as text/plain instead of the verify form.
+    assertNotNull(gatePage.getResponseHeaderValue("Content-Type"),
+        "the gate page must carry a Content-Type header (absent + nosniff = browser "
+            + "renders raw source as text/plain)");
+    assertTrue(gatePage.getResponseHeaderValue("Content-Type").startsWith("text/html"),
+        "the gate page Content-Type must be text/html: "
+            + gatePage.getResponseHeaderValue("Content-Type"));
     String gateHtml = gatePage.getContentAsString();
     java.util.regex.Matcher gs = java.util.regex.Pattern
         .compile("src=\"([^\"]*mfa-gate.js)\"").matcher(gateHtml);
