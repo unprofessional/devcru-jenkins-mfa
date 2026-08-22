@@ -686,9 +686,42 @@ class MfaProfileIT {
         "the section's JS bindings must RESOLVE against the descriptor — the live bug "
             + "rendered the literal expression names because the jelly read them off 'it' "
             + "(the target user) instead of 'descriptor': " + head(html));
-    assertTrue(html.contains("var BASE = \"" + base + "mfa/\""),
-        "the JS endpoint base must be the absolute rootUrl + mfa/ (live bug: literal 'mfaBaseUrl' "
-            + "made every button fetch a garbage relative URL): " + head(html));
+    assertTrue(html.contains("data-mfa-base=\"" + base + "mfa/\""),
+        "the section's JS endpoint base must be the absolute rootUrl + mfa/ on the data attribute "
+            + "(live bug round 1: literal 'mfaBaseUrl' made every button fetch a garbage relative "
+            + "URL): " + head(html));
+    // CSP round 2: Jenkins serves script-src 'self' — an inline <script> never executes
+    // (live symptom: dead buttons, ZERO Network-tab activity). The section's JS must ride
+    // a same-origin static file served by the plugin, and that file must actually load.
+    assertTrue(html.contains("mfa-section.js"),
+        "the section JS must be a plugin-served static file (CSP blocks inline scripts): "
+            + head(html));
+    java.util.regex.Matcher js = java.util.regex.Pattern
+        .compile("src=\"([^\"]*mfa-section.js)\"").matcher(html);
+    assertTrue(js.find(), "the section script tag must carry its src: " + head(html));
+    WebResponse jsResp = ce.loadWebResponse(new WebRequest(new URL(js.group(1))));
+    assertEquals(200, jsResp.getStatusCode(),
+        "the plugin-served section JS must load (a 404 here is dead buttons again)");
+    assertTrue(jsResp.getContentAsString().contains("data-mfa-base"),
+        "the served section JS must be the data-attribute-reading build");
+
+    // The GATE page needs the same treatment: its verify-form JS is the only
+    // way an enrolled user ever proves a factor — inline it never executes
+    // under the same CSP, which is a lockout, not a dead button.
+    WebResponse gatePage = rawGet(ce, base, "/mfa");
+    for (int h = 0; gatePage.getStatusCode() == 302 && h++ < 3; ) {
+      String loc = gatePage.getResponseHeaderValue("Location");
+      gatePage = ce.loadWebResponse(new WebRequest(hostAbs(base, loc)));
+    }
+    assertEquals(200, gatePage.getStatusCode(), "the gate page must render");
+    String gateHtml = gatePage.getContentAsString();
+    java.util.regex.Matcher gs = java.util.regex.Pattern
+        .compile("src=\"([^\"]*mfa-gate.js)\"").matcher(gateHtml);
+    assertTrue(gs.find(),
+        "the gate page JS must be a plugin-served static file (CSP blocks inline scripts; "
+            + "inline here = enrolled users can never verify = lockout): " + head(gateHtml));
+    WebResponse gateJs = ce.loadWebResponse(new WebRequest(new URL(gs.group(1))));
+    assertEquals(200, gateJs.getStatusCode(), "the plugin-served gate JS must load");
 
     MfaUserProperty before = User.getById(enrolled, true).getProperty(MfaUserProperty.class);
     long trustedBefore = before.getTrustedUntilMs();

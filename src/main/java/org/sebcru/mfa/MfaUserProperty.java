@@ -364,6 +364,22 @@ public class MfaUserProperty extends UserProperty {
       }
     }
 
+    /**
+     * The URL of the section's static JS file — {@code <root>/plugin/
+     * devcru-mfa/mfa-section.js}. Jenkins' CSP is {@code script-src 'self'}
+     * (no 'unsafe-inline'), so the section's script cannot live inline in
+     * config.jelly — it never executes there (live incident 2026-08-22:
+     * every button dead, zero Network-tab activity). A plain script tag
+     * with this URL is same-origin and CSP-clean. Derived from
+     * {@link #getMfaBaseUrl()} so the root-URL policy (and its pre-boot
+     * fallback) stays in one place.
+     */
+    public String getMfaSectionScriptUrl() {
+      String b = getMfaBaseUrl();
+      return b.substring(0, b.length() - "mfa/".length())
+          + "plugin/devcru-mfa/mfa-section.js";
+    }
+
     @Override
     public MfaUserProperty newInstance(User u) {
       return new MfaUserProperty();
