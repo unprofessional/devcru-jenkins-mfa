@@ -1117,7 +1117,7 @@ public class MfaController implements RootAction {
    *
    * <p>GIVEN an issuer, an account id, and a canonical unpadded Base32
    * secret WHEN built THEN the URI is
-   * {@code otpauth://otp/<label>?secret=<s>&issuer=<i>&algorithm=SHA1&digits=6&period=30}
+   * {@code otpauth://totp/<label>?secret=<s>&issuer=<i>&algorithm=SHA1&digits=6&period=30}
    * where the label is {@code <issuer>:<account>} (the OTPAuth convention,
    * the colon unencoded — it separates label parts, not query parts) and
    * EVERYTHING else percent-encoded: label characters, the issuer
@@ -1136,7 +1136,7 @@ public class MfaController implements RootAction {
    */
   static String buildOtpauthUri(String issuer, String account, String base32Secret) {
     String label = enc(issuer) + ":" + enc(account);
-    return "otpauth://otp/" + label
+    return "otpauth://totp/" + label
         + "?secret=" + enc(base32Secret.toUpperCase(java.util.Locale.ROOT))
         + "&issuer=" + enc(issuer)
         + "&algorithm=SHA1"
