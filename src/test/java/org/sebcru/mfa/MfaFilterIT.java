@@ -230,6 +230,65 @@ class MfaFilterIT {
   // ==================================================================
   // Case 2 — email-code end to end (the live mail round trip).
   // ==================================================================
+  // Case — the gate's own static assets pass a GATED session
+  // (live incident round 4, 2026-08-22: mfa-gate.js 302'd back to the
+  // gate page, Chrome refused the text/html "script", Verify was dead).
+  // ==================================================================
+
+  /**
+   * WHAT: a gated (enrolled, unverified, no trust) session must still load
+   * THIS plugin's own static assets — the gate page's verify-form JS lives
+   * at {@code /plugin/devcru-mfa/mfa-gate.js} (CSP forbids inline scripts).
+   * If the gate bounces that request, the "script" comes back as the gate
+   * page's text/html, Chrome refuses to execute it (strict MIME checking),
+   * and the Verify button is dead — the gate bricks its own key. Scoped
+   * pin: another plugin's asset path stays gated.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN an enrolled user, logged in with the password ONLY (gated)
+   * WHEN  GET /plugin/devcru-mfa/mfa-gate.js
+   * THEN  200 with a text/javascript content type (NOT a 302 to /mfa)
+   * WHEN  GET /plugin/some-other-plugin/script.js
+   * THEN  302 (only THIS plugin's assets are ungated)
+   * </pre>
+   */
+  @Test
+  void gatedSessionStillLoadsThisPluginsStaticAssets(JenkinsRule rule) throws Exception {
+    String user = "it-static";
+    String pw = "secret123";
+    enrollTotp(user, pw, Totp.newBase32Secret());
+    URL base = rule.getURL();
+
+    JenkinsRule.WebClient c = rule.createWebClient();
+    c.setJavaScriptEnabled(false);
+    c.setThrowExceptionOnFailingStatusCode(false);
+    c.login(user, pw);
+
+    // Precondition: the session IS gated (a protected GET bounces).
+    WebResponse bounce = rawGet(c, base, "/");
+    assertEquals(302, bounce.getStatusCode(),
+        "precondition: an enrolled unverified session is gated: " + bounce.getStatusCode());
+
+    // The gate's own JS must pass — 200, executable content type.
+    WebResponse js = rawGet(c, base, "/plugin/devcru-mfa/mfa-gate.js");
+    assertEquals(200, js.getStatusCode(),
+        "the gate's own JS must NOT be bounced — a 302 here turns the script into "
+            + "the gate page's text/html and Chrome refuses to run it (Verify dead): "
+            + js.getStatusCode());
+    assertNotNull(js.getResponseHeaderValue("Content-Type"),
+        "the JS must carry a content type");
+    assertTrue(js.getResponseHeaderValue("Content-Type").contains("javascript"),
+        "the JS content type must be executable: " + js.getResponseHeaderValue("Content-Type"));
+
+    // Scope pin: other plugins' assets stay gated.
+    WebResponse other = rawGet(c, base, "/plugin/some-other-plugin/script.js");
+    assertEquals(302, other.getStatusCode(),
+        "only devcru-mfa's own assets are ungated; other plugin paths stay gated: "
+            + other.getStatusCode());
+  }
+
+  // ==================================================================
 
   /**
    * WHAT: the email-code round trip — a {@code CaptureEmailSender} is
