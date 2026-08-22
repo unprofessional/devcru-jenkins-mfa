@@ -215,7 +215,7 @@ class MfaProfileIT {
     String seed = gen.optString("seed");
     assertTrue(seed.matches("[A-Z2-7]{16,}"),
         "the generated seed is canonical unpadded Base32 (>=16 chars): " + seed);
-    assertTrue(gen.optString("otpauthUri").startsWith("otpauth://otp/"),
+    assertTrue(gen.optString("otpauthUri").startsWith("otpauth://totp/"),
         "the otpauth URI is well-shaped: " + gen.optString("otpauthUri"));
     assertTrue(gen.optString("dataUriPng").startsWith("data:image/png;base64,"),
         "the QR is a PNG data-URI: " + head(gen.optString("dataUriPng")));
