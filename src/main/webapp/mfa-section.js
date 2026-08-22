@@ -24,7 +24,8 @@
             not_enrolled: "That factor is not enabled on this account.",
             not_authenticated: "Your session looks off — reload the page and try again.",
             verification_required: "This action needs a freshly verified sign-in: complete the one-time code step first, then reload this page.",
-            server_error: "Something went wrong on the server. Try again."
+            server_error: "Something went wrong on the server. Try again.",
+            persistence_failed: "The code checked out, but saving it failed. It works for this session only — try again, and if this repeats, tell your admin (the factor is lost on restart)."
           };
 
           function showMsg(kind, text) {
