@@ -21,7 +21,7 @@ import org.sebcru.mfa.crypto.Totp;
  *
  * <h2>What this file pins down</h2>
  * <ol>
- *   <li>{@code buildOtpauthUri} — the exact {@code otpauth://otp/…} URI an
+ *   <li>{@code buildOtpauthUri} — the exact {@code otpauth://totp/…} URI an
  *       enrolment QR encodes. This string is the interop contract with every
  *       RFC 6238 authenticator (Authy, Google Authenticator, 1Password); a
  *       wrong scheme, missing parameter, or unencoded character is a "your
@@ -67,7 +67,7 @@ class MfaProfileSeamTest {
    *       secret "JBSWY3DPEHPK3PXP"
    * WHEN  the URI is built
    * THEN  it is exactly
-   *       "otpauth://otp/devcru Jenkins:mads?secret=JBSWY3DPEHPK3PXP&issuer=devcru Jenkins&algorithm=SHA1&digits=6&period=30"
+   *       "otpauth://totp/devcru Jenkins:mads?secret=JBSWY3DPEHPK3PXP&issuer=devcru Jenkins&algorithm=SHA1&digits=6&period=30"
    *       (label and issuer space-encoded as %20 — the apps' parser expects)
    * AND   it carries no trailing garbage, no padding '=' from the secret
    *       (the plugin stores unpadded Base32), and no newline
@@ -87,7 +87,7 @@ class MfaProfileSeamTest {
   @Test
   void buildsCanonicalOtpauthUri() {
     assertEquals(
-        "otpauth://otp/devcru%20Jenkins:mads?secret=JBSWY3DPEHPK3PXP"
+        "otpauth://totp/devcru%20Jenkins:mads?secret=JBSWY3DPEHPK3PXP"
             + "&issuer=devcru%20Jenkins&algorithm=SHA1&digits=6&period=30",
         MfaController.buildOtpauthUri("devcru Jenkins", "mads", "JBSWY3DPEHPK3PXP"));
   }
@@ -127,7 +127,7 @@ class MfaProfileSeamTest {
     String uri = MfaController.buildOtpauthUri(
         "a&b=c%d+e f", "m%a+d&z=e", "JBSWY3DPEHPK3PXP");
     // Label: space → %20, & → %26, = → %3D, % → %25, + → %2B.
-    assertTrue(uri.startsWith("otpauth://otp/a%26b%3Dc%25d%2Be%20f:m%25a%2Bd%26z%3De?"), uri);
+    assertTrue(uri.startsWith("otpauth://totp/a%26b%3Dc%25d%2Be%20f:m%25a%2Bd%26z%3De?"), uri);
     // The hostile issuer could not inject a parameter: exactly one secret=.
     assertEquals(1, uri.split("secret=", -1).length - 1, uri);
     assertEquals(1, uri.split("issuer=", -1).length - 1, uri);

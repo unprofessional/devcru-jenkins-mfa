@@ -12,8 +12,16 @@
   renders NOTHING and nothing in the build complains — the silent-failure trap
   the render-presence IT case exists to catch.
 
-  BINDING (what the section can reference, from the core include scope):
-    it         = the MfaUserProperty DESCRIPTOR   (non-null ALWAYS, even when a
+  BINDING (verified 2026-08-22 against jenkins-core 2.528.3's
+  UserPropertyCategorySecurityAction/index.jelly — the include scope sets:
+    <j:set var="it" value="${thisAction.targetUser}"/>
+    <j:set var="descriptor" value="${d}"/>
+    <j:set var="instance" value="${instances[d]}"/>):
+    it         = the TARGET USER (NOT the descriptor — the original Task-9
+                                    assumption was wrong and ${it.mfaBaseUrl} rendered
+                                    the LITERAL string "mfaBaseUrl", killing the JS;
+                                    found live on jenkins.devcru.org 2026-08-22).
+    descriptor = the MfaUserProperty DESCRIPTOR (non-null ALWAYS, even when a
                                     fresh user has no property yet) — the section's
                                     JS reads getMfaCrumbField/Value/BaseUrl off it.
     instance   = the user's BOUND MfaUserProperty (null for a fresh, not-yet-enrolled
@@ -26,14 +34,25 @@
   registeredEmail field (@DataBoundSetter) — the TOTP seed NEVER travels configSubmit;
   it is committed by postEnrollConfirm (JSON endpoint) after a code is proven.
 
-  escape-by-default='false' so the inline <script>/CSS survive verbatim (dynamic attribute
-  values — mfaBaseUrl, mfaCrumbField/Value — are interpolated raw; <x:out> is not a tag on
-  this runtime, per A18 — so dynamic TEXT uses j:out, dynamic ATTRIBUTES are raw ${...}, the
-  same split the login page /mfa/index.jelly uses).
+  escape-by-default='false' so the inline CSS and the dynamic data attributes survive
+  verbatim (dynamic ATTRIBUTE values — mfaBaseUrl, mfaCrumbField/Value — are interpolated
+  raw; <x:out> is not a tag on this runtime, per A18 — so dynamic TEXT uses j:out, the same
+  split the login page /mfa/index.jelly uses).
+
+  JS NOTE (2026-08-22, live incident round 2): the section's script is NOT inline. Jenkins'
+  CSP is script-src 'self' (no 'unsafe-inline'), so an inline <script> here never executes
+  (live symptom: every button dead, zero Network-tab activity). The script lives at
+  webapp/mfa-section.js — served from 'self' at <root>/plugin/devcru-mfa/mfa-section.js
+  (Plugin.doDynamic serves the webapp ROOT, so the file sits at the webapp root, NOT under
+  the package path) — and reads its crumb/endpoint-base config off the data-mfa-* attributes
+  above (descriptor.getMfaSectionScriptUrl() builds the URL).
 -->
-<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form">
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:f="/lib/form">
   <j:if test="${descriptor.enabled}">
-    <div id="mfaSection" class="mfa-section">
+    <div id="mfaSection" class="mfa-section"
+         data-mfa-base="${descriptor.mfaBaseUrl}"
+         data-mfa-crumb-field="${descriptor.mfaCrumbField}"
+         data-mfa-crumb-value="${descriptor.mfaCrumbValue}">
       <f:invisibleEntry>
         <!-- Dummy so the enclosing rowSet always carries an entry (core idiom,
              cf. ConsoleUrlProviderUserProperty/config.jelly). "unused" has no
@@ -154,17 +173,31 @@
         .mfa-msg.mfa-msg--ok { color: var(--success-color, #2f7d32); }
         .mfa-msg.mfa-msg--error { color: var(--error-color, #b3261e); }
         .mfa-msg:empty { display: none; }
-        .mfa-factor { padding: 10px 0; border-top: 1px solid #f0f0f0; }
+        .mfa-factor { padding: 10px 0; border-top: 1px solid var(--card-border-color, var(--panel-border-color, #f0f0f0)); }
         .mfa-factor__title { font-weight: 600; margin-bottom: 6px; }
         .mfa-factor__status { font-size: 12px; margin-bottom: 8px; }
         .mfa-factor__status--on { color: var(--success-color, #2f7d32); }
         .mfa-factor__status--off { color: var(--text-color-2, #767676); }
         .mfa-hint { font-size: 12px; color: var(--text-color-3, #959595); margin: 8px 0; }
-        .mfa-btn { cursor: pointer; }
+        /* Buttons: EXPLICIT theme-aware colors. The old rules let color and
+           background inherit — on the dark theme (Jenkins default since 2.414,
+           and the theme plugin's own token set) that is white text on the
+           UA's light-gray button, and the ghost variant vanished entirely on
+           the light enrolment box (live report 2026-08-22: "white text on a
+           white background"). Never inherit button colors; pull them from
+           theme tokens with core-era fallbacks so both themes stay readable. */
+        .mfa-btn {
+          cursor: pointer;
+          color: var(--text-color, #1f2328);
+          background: var(--button-background, #f8f9fa);
+          border: 1px solid var(--card-border-color, var(--panel-border-color, #d0d7de));
+          border-radius: 6px;
+          padding: 6px 12px;
+        }
         .mfa-btn--danger { background: var(--error-background, #fde9e8); color: var(--error-color, #b3261e); }
         .mfa-btn--primary { background: var(--primary-color, #1f6feb); color: #fff; border-color: var(--primary-color, #1f6feb); }
         .mfa-btn--ghost { background: transparent; }
-        .mfa-enroll { margin-top: 12px; padding: 12px; background: var(--secondary-background, #fafafa); border: 1px solid #eee; }
+        .mfa-enroll { margin-top: 12px; padding: 12px; background: var(--card-background, var(--secondary-background, #fafafa)); border: 1px solid var(--card-border-color, var(--panel-border-color, #eee)); }
         .mfa-qr-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
         .mfa-qr-row #mfaTotpQr { width: 220px; height: 220px; border: 1px solid #ddd; background: #fff; }
         .mfa-manual { flex: 1; min-width: 240px; }
@@ -178,154 +211,7 @@
         .mfa-divider { height: 0; }
       </style>
 
-      <script>
-        //<![CDATA[
-        (function () {
-          "use strict";
-          var CRUMB_NAME = "${it.mfaCrumbField}";
-          var CRUMB = "${it.mfaCrumbValue}";
-          var BASE = "${it.mfaBaseUrl}"; // e.g. "http://host:port/jenkins/mfa/"
-          var section = document.getElementById("mfaSection");
-          var msg = document.getElementById("mfaMsg");
-          if (!section) { return; }
-          function $(id) { return document.getElementById(id); }
-          var totpEnroll = $("mfaTotpEnroll");
-          var totpQr = $("mfaTotpQr");
-          var totpManual = $("mfaTotpManual");
-          var totpSeed = $("mfaTotpSeed");
-          var totpCode = $("mfaTotpCode");
-
-          var MESSAGES = {
-            wrong_code: "That code did not match. Try the current 6-digit code from your app.",
-            invalid_seed: "That code is no longer valid — generate a fresh one and try again.",
-            email_not_enrolled: "Set and save a registered email address first.",
-            resend_cooldown: "Please wait a moment before requesting another code.",
-            not_enrolled: "That factor is not enabled on this account.",
-            not_authenticated: "Your session looks off — reload the page and try again.",
-            verification_required: "This action needs a freshly verified sign-in: complete the one-time code step first, then reload this page.",
-            server_error: "Something went wrong on the server. Try again."
-          };
-
-          function showMsg(kind, text) {
-            msg.className = "mfa-msg mfa-msg--" + kind;
-            msg.textContent = text;
-          }
-          function clearMsg() { msg.className = "mfa-msg"; msg.textContent = ""; }
-
-          function post(endpoint, payload) {
-            var body = new URLSearchParams();
-            if (CRUMB) { body.append(CRUMB_NAME, CRUMB); }
-            for (var k in (payload || {})) { if (payload.hasOwnProperty(k)) { body.append(k, payload[k]); } }
-            return fetch(BASE + endpoint, {
-              method: "POST",
-              credentials: "same-origin",
-              headers: { "Content-Type": "application/x-www-form-urlencoded",
-                         "X-Requested-With": "XMLHttpRequest" },
-              body: body.toString()
-            }).then(function (r) { return r.json(); })
-              ["catch"](function () { return { ok: false, error: "server_error" }; });
-          }
-
-          function showEnrollUI() { if (totpEnroll) { totpEnroll.hidden = false; } }
-          function hideEnrollUI() { if (totpEnroll) { totpEnroll.hidden = true; } }
-          function clearEnroll() {
-            if (totpQr) { totpQr.removeAttribute("src"); }
-            if (totpManual) { totpManual.textContent = ""; }
-            if (totpSeed) { totpSeed.value = ""; }
-            if (totpCode) { totpCode.value = ""; }
-            hideEnrollUI();
-          }
-          function refreshState() { window.location.reload(); }
-
-          var genBtn = $("mfaTotpGenerate");
-          function generate() {
-            if (genBtn) { genBtn.disabled = true; }
-            clearMsg();
-            post("postEnroll", {}).then(function (res) {
-              if (genBtn) { genBtn.disabled = false; }
-              if (!res.ok) { showMsg("error", MESSAGES[res.error] || MESSAGES.server_error); return; }
-              if (totpSeed) { totpSeed.value = res.seed || ""; }
-              if (totpQr && res.dataUriPng) { totpQr.setAttribute("src", res.dataUriPng); }
-              else if (totpQr) { totpQr.remove(); }
-              if (totpManual) { totpManual.textContent = res.seed || ""; }
-              showEnrollUI();
-            })["catch"](function () {
-              if (genBtn) { genBtn.disabled = false; }
-              showMsg("error", MESSAGES.server_error);
-            });
-          }
-          if (genBtn) { genBtn.addEventListener("click", generate); }
-          var regenBtn = $("mfaTotpRegenerate");
-          if (regenBtn) { regenBtn.addEventListener("click", function () { clearEnroll(); generate(); }); }
-
-          var confirmBtn = $("mfaTotpConfirm");
-          if (confirmBtn) {
-            confirmBtn.addEventListener("click", function () {
-              clearMsg();
-              confirmBtn.disabled = true;
-              post("postEnrollConfirm", { seed: totpSeed ? totpSeed.value : "", code: (totpCode.value || "").trim() })
-                .then(function (res) {
-                  if (res.ok) { refreshState(); return; }
-                  confirmBtn.disabled = false;
-                  showMsg("error", MESSAGES[res.error] || MESSAGES.server_error);
-                })["catch"](function () { confirmBtn.disabled = false; showMsg("error", MESSAGES.server_error); });
-            });
-          }
-
-          var disableTotp = $("mfaTotpDisable");
-          if (disableTotp) {
-            disableTotp.addEventListener("click", function () {
-              if (!window.confirm("Disable authenticator-app MFA for this account? It stops working immediately.")) { return; }
-              clearMsg();
-              post("postDisableTotp", {}).then(function (res) {
-                if (res.ok) { refreshState(); return; }
-                showMsg("error", MESSAGES[res.error] || MESSAGES.server_error);
-              })["catch"](function () { showMsg("error", MESSAGES.server_error); });
-            });
-          }
-
-          var testCodeBtn = $("mfaEmailTestCode");
-          if (testCodeBtn) {
-            testCodeBtn.addEventListener("click", function () {
-              clearMsg();
-              testCodeBtn.disabled = true;
-              post("postEmailTestCode", {}).then(function (res) {
-                testCodeBtn.disabled = false;
-                if (res.ok) { showMsg("ok", "A one-time code is on its way to your registered address."); return; }
-                if (res.error === "resend_cooldown" && res.retrySeconds) {
-                  showMsg("error", MESSAGES.resend_cooldown + " (about " + res.retrySeconds + "s)");
-                  return;
-                }
-                showMsg("error", MESSAGES[res.error] || MESSAGES.server_error);
-              })["catch"](function () { testCodeBtn.disabled = false; showMsg("error", MESSAGES.server_error); });
-            });
-          }
-
-          var disableEmail = $("mfaEmailDisable");
-          if (disableEmail) {
-            disableEmail.addEventListener("click", function () {
-              if (!window.confirm("Disable email-code MFA and clear the registered address?")) { return; }
-              clearMsg();
-              post("postDisableEmail", {}).then(function (res) {
-                if (res.ok) { refreshState(); return; }
-                showMsg("error", MESSAGES[res.error] || MESSAGES.server_error);
-              })["catch"](function () { showMsg("error", MESSAGES.server_error); });
-            });
-          }
-
-          var revokeBtn = $("mfaRevokeTrust");
-          if (revokeBtn) {
-            revokeBtn.addEventListener("click", function () {
-              clearMsg();
-              post("postRevokeTrust", {}).then(function (res) {
-                if (res.ok) { showMsg("ok", "Remembered devices revoked — the next sign-in will ask for a second factor."); return; }
-                showMsg("error", MESSAGES[res.error] || MESSAGES.server_error);
-              })["catch"](function () { showMsg("error", MESSAGES.server_error); });
-            });
-          }
-        })();
-        //]]>
-      </script>
+      <script src="${descriptor.mfaSectionScriptUrl}"></script>
     </div>
   </j:if>
 </j:jelly>

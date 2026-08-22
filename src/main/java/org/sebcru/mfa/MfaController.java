@@ -7,6 +7,8 @@ import hudson.security.csrf.CrumbIssuer;
 import hudson.util.Secret;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.io.PrintWriter;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -140,6 +142,9 @@ import org.sebcru.mfa.gate.TrustStore;
  */
 @Extension
 public class MfaController implements RootAction {
+
+  private static final Logger LOGGER =
+      Logger.getLogger(MfaController.class.getName());
 
   /** Session attribute the Task 7 gate reads to know this session is MFA-verified. */
   static final String VERIFIED_ATTR = "org.sebcru.mfa.verified";
@@ -281,6 +286,30 @@ public class MfaController implements RootAction {
     }
   }
 
+  /**
+   * The URL of this page's static JS file — {@code <root>/plugin/
+   * devcru-mfa/mfa-gate.js}. Jenkins' CSP is {@code script-src 'self'}
+   * (no 'unsafe-inline'), so the verify-form script cannot live inline in
+   * index.jelly — it never executes there. Same fix, same incident
+   * (2026-08-22) as the section's {@code mfa-section.js}: without it the
+   * gate page renders but can never POST a code — an enrolment-time
+   * lockout. A plain script tag with this URL is same-origin and CSP-clean;
+   * the root-URL policy is core's ({@code Jenkins.getRootUrl()}), with the
+   * context-relative fallback for pre-boot.
+   */
+  public String getGateScriptUrl() {
+    try {
+      String root = jenkins.model.Jenkins.get().getRootUrl();
+      if (root == null) {
+        return "plugin/devcru-mfa/mfa-gate.js";
+      }
+      String b = root.endsWith("/") ? root : root + "/";
+      return b + "plugin/devcru-mfa/mfa-gate.js";
+    } catch (RuntimeException e) {
+      return "plugin/devcru-mfa/mfa-gate.js";
+    }
+  }
+
   // ---------------------------------------------------------------------
   // POST endpoints. Core's crumb filter + @RequirePOST guard them; this is
   // belt-and-suspenders on method, not on policy. The page embeds the hidden
@@ -400,9 +429,13 @@ public class MfaController implements RootAction {
       try {
         trustStore.trust(p, cfg, now);
         u.save();
-      } catch (IOException ignore) {
-        // Persistence hiccup must not strand a user who already proved
-        // the factor; the session attribute still authorises this session.
+      } catch (IOException e) {
+        // The session attribute still authorises THIS session, so the user
+        // is not stranded — but the trust + streak are lost on restart.
+        // Loud, not silent (landmine fix 2026-08-22).
+        LOGGER.log(Level.WARNING,
+            "MFA verify succeeded but trust/streak failed to persist for user "
+                + u.getId() + " — user re-verifies once after next restart", e);
       }
       rateLimiter.clear(name);
       regenerateVerified(req);
@@ -427,8 +460,12 @@ public class MfaController implements RootAction {
       p.setFailedAttemptStreak(p.getFailedAttemptStreak() + 1);
       try {
         u.save();
-      } catch (IOException ignore) {
-        // Telemetry counter only; non-fatal.
+      } catch (IOException e) {
+        // Telemetry counter only — but an unpersisted streak means the
+        // lockout can be evaded by a restart. Log it (landmine fix).
+        LOGGER.log(Level.WARNING,
+            "MFA failure-streak increment failed to persist for user "
+                + u.getId() + " — lockout counter may reset on restart", e);
       }
       write(rsp, VerifyOutcome.fail(failReason));
     }
@@ -478,8 +515,12 @@ public class MfaController implements RootAction {
     }
     try {
       u.save();
-    } catch (IOException ignore) {
-      // Non-fatal; the pending hash/issued-at are already set in memory.
+    } catch (IOException e) {
+      // The pending hash/issued-at live in memory, so THIS code still
+      // verifies — but it dies on restart. Log it (landmine fix).
+      LOGGER.log(Level.WARNING,
+          "MFA email-code issue failed to persist for user " + u.getId()
+              + " — pending code lost on restart", e);
     }
     write(rsp, VerifyOutcome.resent(cfg.getEmailResendCooldownSeconds()));
   }
@@ -610,10 +651,16 @@ public class MfaController implements RootAction {
     }
     try {
       u.save();
-    } catch (IOException ignore) {
-      // In-memory property already carries the factor; a persistence hiccup
-      // reports as ok (the user has the QR secret in hand and can retry
-      // confirm) rather than implying the commit failed.
+    } catch (IOException e) {
+      // The in-memory property carries the factor, so this session works —
+      // but answering ok here HIDES data loss: the enrolment vanishes on the
+      // next restart and the user's authenticator app holds a dead secret.
+      // Report honestly; the user can retry confirm (landmine fix).
+      LOGGER.log(Level.SEVERE,
+          "MFA TOTP enrolment committed in memory but FAILED to persist for user "
+              + u.getId() + " — factor WILL BE LOST on restart", e);
+      writeProfileJson(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_PERSISTENCE).toJSONObject());
+      return;
     }
     writeProfileJson(rsp, okJson());
   }
@@ -676,8 +723,12 @@ public class MfaController implements RootAction {
     }
     try {
       u.save();
-    } catch (IOException ignore) {
-      // Non-fatal; the pending hash/issued-at are already set in memory.
+    } catch (IOException e) {
+      // The pending hash/issued-at live in memory, so THIS code still
+      // verifies — but it dies on restart. Log it (landmine fix).
+      LOGGER.log(Level.WARNING,
+          "MFA email-code issue failed to persist for user " + u.getId()
+              + " — pending code lost on restart", e);
     }
     write(rsp, VerifyOutcome.resent(cfg.getEmailResendCooldownSeconds()));
   }
@@ -813,9 +864,12 @@ public class MfaController implements RootAction {
     trustStore.revoke(p);
     try {
       u.save();
-    } catch (IOException ignore) {
-      // In-memory trust is already 0; the save persists it for the next
-      // login. A hiccup here is the same shape as postVerify's (non-fatal).
+    } catch (IOException e) {
+      // In-memory trust is already 0 so this session is fine — but without
+      // the save the revocation is undone by the next restart. Log it.
+      LOGGER.log(Level.WARNING,
+          "MFA trust revocation failed to persist for user " + u.getId()
+              + " — remembered-device revocation undone on restart", e);
     }
     writeProfileJson(rsp, okJson());
   }
@@ -1093,7 +1147,7 @@ public class MfaController implements RootAction {
    *
    * <p>GIVEN an issuer, an account id, and a canonical unpadded Base32
    * secret WHEN built THEN the URI is
-   * {@code otpauth://otp/<label>?secret=<s>&issuer=<i>&algorithm=SHA1&digits=6&period=30}
+   * {@code otpauth://totp/<label>?secret=<s>&issuer=<i>&algorithm=SHA1&digits=6&period=30}
    * where the label is {@code <issuer>:<account>} (the OTPAuth convention,
    * the colon unencoded — it separates label parts, not query parts) and
    * EVERYTHING else percent-encoded: label characters, the issuer
@@ -1112,7 +1166,7 @@ public class MfaController implements RootAction {
    */
   static String buildOtpauthUri(String issuer, String account, String base32Secret) {
     String label = enc(issuer) + ":" + enc(account);
-    return "otpauth://otp/" + label
+    return "otpauth://totp/" + label
         + "?secret=" + enc(base32Secret.toUpperCase(java.util.Locale.ROOT))
         + "&issuer=" + enc(issuer)
         + "&algorithm=SHA1"

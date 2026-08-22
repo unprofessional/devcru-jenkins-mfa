@@ -7,9 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import hudson.model.FreeStyleProject;
 import hudson.model.User;
+import hudson.model.UserProperty;
+import hudson.model.UserPropertyDescriptor;
+import hudson.model.userproperty.UserPropertyCategory;
 import hudson.security.FullControlOnceLoggedInAuthorizationStrategy;
 import hudson.security.HudsonPrivateSecurityRealm;
 import hudson.util.Secret;
+import java.io.File;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
@@ -212,7 +216,7 @@ class MfaProfileIT {
     String seed = gen.optString("seed");
     assertTrue(seed.matches("[A-Z2-7]{16,}"),
         "the generated seed is canonical unpadded Base32 (>=16 chars): " + seed);
-    assertTrue(gen.optString("otpauthUri").startsWith("otpauth://otp/"),
+    assertTrue(gen.optString("otpauthUri").startsWith("otpauth://totp/"),
         "the otpauth URI is well-shaped: " + gen.optString("otpauthUri"));
     assertTrue(gen.optString("dataUriPng").startsWith("data:image/png;base64,"),
         "the QR is a PNG data-URI: " + head(gen.optString("dataUriPng")));
@@ -263,6 +267,109 @@ class MfaProfileIT {
   // ==================================================================
   // Case c — disable/revoke: each endpoint flips exactly the right flag.
   // ==================================================================
+
+  /**
+   * WHAT: the persistence-failure path is HONEST, not silent (landmine fix,
+   * 2026-08-22). The old postEnrollConfirm swallowed the {@code u.save()}
+   * IOException and answered ok — the user walked away believing the factor
+   * was saved while it lived only in memory and died on restart (their
+   * authenticator app holding a dead secret). Now: the failure is logged
+   * SEVERE and the client gets {@code persistence_failed}; the in-memory
+   * property still carries the factor (this session keeps working), and a
+   * retry after the storage heals persists for real.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN a fresh user, postEnroll produced a seed, and the user's config
+   *       directory is read-only (User.save() will throw)
+   * WHEN  postEnrollConfirm is POSTed with the correct code
+   * THEN  the response is ok:false / error=persistence_failed (NOT ok:true)
+   * AND   the in-memory property still carries the seed (graceful degrade)
+   * WHEN  the directory is writable again and the user proves the factor at
+   *       the gate (the natural recovery)
+   * THEN  the gate verify's own save persists the property to disk
+   * </pre>
+   */
+  @Test
+  void enrollConfirmReportsPersistenceFailureHonestly(JenkinsRule rule) throws Exception {
+    String user = "it-prof-persist";
+    String pw = "secret123";
+    ensureRealm().createAccount(user, pw);
+    URL base = rule.getURL();
+
+    JenkinsRule.WebClient c = rule.createWebClient();
+    c.setJavaScriptEnabled(false);
+    c.setThrowExceptionOnFailingStatusCode(false);
+    c.login(user, pw);
+    String crumb = securityPageCrumb(c, base, user);
+
+    // Materialise the user's config directory (it is created lazily on the
+    // first save) so the test can make it read-only BEFORE the confirm.
+    User.getById(user, true).save();
+
+    JSONObject gen = postMfaProfile(c, base, "postEnroll", crumb);
+    assertTrue(gen.optBoolean("ok"), "postEnroll must succeed: " + gen);
+    String seed = gen.optString("seed");
+    byte[] key = Totp.decodeSecret(seed);
+    String goodCode = Totp.codeAt(key, System.currentTimeMillis());
+
+    // Make the user's config directory read-only so User.save() throws.
+    File usersRoot = new File(rule.jenkins.getRootDir(), "users");
+    File userDir = null;
+    String[] all = usersRoot.list();
+    // Jenkins sanitises the id for the directory name (hyphens dropped:
+    // "it-prof-persist" -> "itprofpersist_<hash>"), so match the sanitised
+    // prefix, not the raw id.
+    String sanitized = user.replaceAll("[^A-Za-z0-9_]", "");
+    File[] dirs = usersRoot.listFiles((d, n) -> n.startsWith(sanitized + "_"));
+    assertNotNull(dirs, "the users directory must exist");
+    assertEquals(1, dirs.length, "exactly one directory for the fresh user: " + usersRoot
+        + " (contents: " + java.util.Arrays.toString(all) + ")");
+    userDir = dirs[0];
+    assertTrue(userDir.setWritable(false, false),
+        "the test must be able to make the user dir read-only");
+    String cookies = c.getCookieManager().getCookies().stream()
+        .map(k -> k.getName() + "=" + k.getValue())
+        .collect(java.util.stream.Collectors.joining("; "));
+    try {
+      // Raw HTTP (not HtmlUnit): the persistence_failed JSON made the
+      // HtmlUnit/Apache stack re-drive the POST once (a client-side retry on
+      // this exact response shape), which turned the single honest answer
+      // into a second, A23-403'd dispatch. The server contract under test is
+      // one request -> one honest envelope, so pin it with a no-retry client.
+      String[] r = rawPost(base, "mfa/postEnrollConfirm", cookies,
+          this.crumbName, crumb, "seed", seed, "code", goodCode);
+      assertEquals("200", r[0], "the confirm must answer its JSON envelope: " + r[0] + " " + r[1]);
+      JSONObject rj = JSONObject.fromObject(r[1]);
+      assertFalse(rj.optBoolean("ok"),
+          "a failed save must NOT answer ok — that hides data loss: " + rj);
+      assertEquals(VerifyOutcome.ERR_PERSISTENCE, rj.optString("error"),
+          "the honest error code is persistence_failed: " + rj);
+
+      // Graceful degrade: the in-memory property carries the factor, so this
+      // session is not stranded.
+      MfaUserProperty inMemory = User.getById(user, true).getProperty(MfaUserProperty.class);
+      assertNotNull(inMemory, "the in-memory property must exist");
+      assertTrue(inMemory.hasTotpFactor(),
+          "the in-memory property still carries the factor after a failed save");
+      assertEquals(seed, inMemory.getTotpSecret().getPlainText(),
+          "the in-memory seed is exactly the presented one");
+    } finally {
+      assertTrue(userDir.setWritable(true, false), "restore writability");
+    }
+
+    // Storage healed. The natural recovery: the user proves the (in-memory)
+    // factor at the gate — that verify's own save persists everything the
+    // failed confirm could not (and marks the session verified, so a later
+    // confirm retry would also pass the A23 guard).
+    verifyTotpToPassGate(c, base, user, seed, "/");
+    File cfg = new File(userDir, "config.xml");
+    assertTrue(cfg.exists(), "the user config file must exist after the healed save");
+    String xml = new String(java.nio.file.Files.readAllBytes(cfg.toPath()),
+        java.nio.charset.StandardCharsets.UTF_8);
+    assertTrue(xml.contains("sebcru.mfa.MfaUserProperty"),
+        "the persisted config must carry the MFA property once storage heals");
+  }
 
   /**
    * WHAT: each of the three state-changing endpoints flips exactly the
@@ -596,6 +703,208 @@ class MfaProfileIT {
   }
 
   // ==================================================================
+  // Case f — the security-tab SAVE (live incident, jenkins.devcru.org
+  //   2026-08-22): configSubmit must not 500 for a fresh user, must not
+  //   wipe factor state for an enrolled user, and the section's JS
+  //   bindings must resolve (not render the literal expression names).
+  // ==================================================================
+
+  /**
+   * WHAT: the two live bugs from the first production deploy, pinned end
+   * to end against core's REAL form. (1) A fresh user saving the security
+   * tab with a registered email 500'd: core's {@code doConfigSubmit} takes
+   * the {@code d.newInstance(req, o)} path when no property exists yet, and
+   * Stapler databinding refuses a class with no {@code @DataBoundConstructor}
+   * ({@code NoStaplerConstructorException}). (2) The section's JS read its
+   * crumb/endpoint-base helpers off {@code it} — which in core's security
+   * include scope is the TARGET USER, not the descriptor — so the rendered
+   * page carried the LITERAL strings "mfaBaseUrl"/"mfaCrumbValue" and every
+   * button fetched a garbage relative URL ("Generate new code does
+   * nothing"). And the latent third: core's default {@code reconfigure}
+   * rebuilds the property from the submitted JSON, which for an enrolled
+   * user would silently WIPE the TOTP seed on every SAVE — the merge
+   * override must keep it.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN a fresh user (no property) logged in
+   * WHEN  the real security-tab form is submitted with a registered email
+   * THEN  the submit succeeds (no 500) and the property now has that email
+   * GIVEN an enrolled user (TOTP seed + registered email), verified past
+   *       the gate
+   * WHEN  the same form is submitted with a CHANGED email
+   * THEN  the email updates AND the TOTP seed / trust / telemetry are
+   *       byte-identical (reconfigure merges, never rebuilds)
+   * AND   the rendered section HTML carries the RESOLVED JS bindings
+   *       (an absolute .../mfa/ base, a real crumb field/value) and never
+   *       the literal names "mfaBaseUrl" / "mfaCrumbField" / "mfaCrumbValue"
+   * </pre>
+   *
+   * <p>WHY/SOLVES: the render-presence case (a) proves the section EXISTS;
+   * this case proves it WORKS — a present-but-unbound section is exactly the
+   * shape that shipped to production (green IT, dead buttons, 500 on SAVE).
+   * Submitting core's actual form (not a hand-built parameter list) is what
+   * makes the rowSet indexing and the {@code _.} field naming faithful to
+   * the browser.
+   */
+  @Test
+  void securityTabSaveCreatesBindsAndNeverWipesFactorState(JenkinsRule rule) throws Exception {
+    String fresh = "it-prof-save-fresh";
+    String enrolled = "it-prof-save-enrolled";
+    String pw = "secret123";
+    String enSecret = Totp.newBase32Secret();
+    String enMail = enrolled + "@devcru.example";
+    User eu = enrollTotp(enrolled, pw, enSecret);
+    MfaUserProperty ep0 = MfaUserProperty.getOrCreate(eu);
+    ep0.setRegisteredEmail(enMail);
+    eu.save();
+    ensureRealm().createAccount(fresh, pw);
+    rule.createProject(FreeStyleProject.class, "it-prof6-job");
+    URL base = rule.getURL();
+
+    // -- Fresh user: SAVE must create the property, not 500.
+    JenkinsRule.WebClient cf = rule.createWebClient();
+    cf.setJavaScriptEnabled(false);
+    cf.setThrowExceptionOnFailingStatusCode(false);
+    cf.login(fresh, pw);
+    String freshMail = fresh + "@devcru.example";
+    submitSecurityForm(cf, base, fresh, freshMail);
+    MfaUserProperty freshProp = User.getById(fresh, true).getProperty(MfaUserProperty.class);
+    assertNotNull(freshProp,
+        "a fresh user's SAVE must create the property via the @DataBoundConstructor "
+            + "path (live bug: NoStaplerConstructorException -> 500)");
+    assertEquals(freshMail, freshProp.getRegisteredEmail(),
+        "the submitted registered email must be data-bound onto the new property");
+
+    // -- Enrolled user: the rendered bindings must resolve, and SAVE must
+    //    merge the email without touching factor state.
+    JenkinsRule.WebClient ce = rule.createWebClient();
+    ce.setJavaScriptEnabled(false);
+    ce.setThrowExceptionOnFailingStatusCode(false);
+    ce.login(enrolled, pw);
+    verifyTotpToPassGate(ce, base, enrolled, enSecret, "/job/it-prof6-job/");
+    String html = securityPageHtml(ce, base, enrolled);
+    assertTrue(html.contains("id=\"mfaSection\""), "precondition: section renders");
+    assertFalse(html.contains("\"mfaBaseUrl\"") || html.contains("\"mfaCrumbField\"")
+            || html.contains("\"mfaCrumbValue\""),
+        "the section's JS bindings must RESOLVE against the descriptor — the live bug "
+            + "rendered the literal expression names because the jelly read them off 'it' "
+            + "(the target user) instead of 'descriptor': " + head(html));
+    assertTrue(html.contains("data-mfa-base=\"" + base + "mfa/\""),
+        "the section's JS endpoint base must be the absolute rootUrl + mfa/ on the data attribute "
+            + "(live bug round 1: literal 'mfaBaseUrl' made every button fetch a garbage relative "
+            + "URL): " + head(html));
+    // CSP round 2: Jenkins serves script-src 'self' — an inline <script> never executes
+    // (live symptom: dead buttons, ZERO Network-tab activity). The section's JS must ride
+    // a same-origin static file served by the plugin, and that file must actually load.
+    assertTrue(html.contains("mfa-section.js"),
+        "the section JS must be a plugin-served static file (CSP blocks inline scripts): "
+            + head(html));
+    java.util.regex.Matcher js = java.util.regex.Pattern
+        .compile("src=\"([^\"]*mfa-section.js)\"").matcher(html);
+    assertTrue(js.find(), "the section script tag must carry its src: " + head(html));
+    WebResponse jsResp = ce.loadWebResponse(new WebRequest(new URL(js.group(1))));
+    assertEquals(200, jsResp.getStatusCode(),
+        "the plugin-served section JS must load (a 404 here is dead buttons again)");
+    assertTrue(jsResp.getContentAsString().contains("data-mfa-base"),
+        "the served section JS must be the data-attribute-reading build");
+
+    // The GATE page needs the same treatment: its verify-form JS is the only
+    // way an enrolled user ever proves a factor — inline it never executes
+    // under the same CSP, which is a lockout, not a dead button.
+    WebResponse gatePage = rawGet(ce, base, "/mfa");
+    for (int h = 0; gatePage.getStatusCode() == 302 && h++ < 3; ) {
+      String loc = gatePage.getResponseHeaderValue("Location");
+      gatePage = ce.loadWebResponse(new WebRequest(hostAbs(base, loc)));
+    }
+    assertEquals(200, gatePage.getStatusCode(), "the gate page must render");
+    // Live incident 2026-08-22 round 3: the self-contained gate document shipped
+    // with NO Content-Type header (core pages get theirs from the l:layout/l:view
+    // wrapper this page deliberately doesn't have); with nosniff the browser
+    // rendered raw HTML source as text/plain instead of the verify form.
+    assertNotNull(gatePage.getResponseHeaderValue("Content-Type"),
+        "the gate page must carry a Content-Type header (absent + nosniff = browser "
+            + "renders raw source as text/plain)");
+    assertTrue(gatePage.getResponseHeaderValue("Content-Type").startsWith("text/html"),
+        "the gate page Content-Type must be text/html: "
+            + gatePage.getResponseHeaderValue("Content-Type"));
+    String gateHtml = gatePage.getContentAsString();
+    java.util.regex.Matcher gs = java.util.regex.Pattern
+        .compile("src=\"([^\"]*mfa-gate.js)\"").matcher(gateHtml);
+    assertTrue(gs.find(),
+        "the gate page JS must be a plugin-served static file (CSP blocks inline scripts; "
+            + "inline here = enrolled users can never verify = lockout): " + head(gateHtml));
+    WebResponse gateJs = ce.loadWebResponse(new WebRequest(new URL(gs.group(1))));
+    assertEquals(200, gateJs.getStatusCode(), "the plugin-served gate JS must load");
+
+    MfaUserProperty before = User.getById(enrolled, true).getProperty(MfaUserProperty.class);
+    long trustedBefore = before.getTrustedUntilMs();
+    int streakBefore = before.getFailedAttemptStreak();
+    String newMail = enrolled + "-new@devcru.example";
+    submitSecurityForm(ce, base, enrolled, newMail);
+    MfaUserProperty after = User.getById(enrolled, true).getProperty(MfaUserProperty.class);
+    assertNotNull(after, "the property must survive its own SAVE");
+    assertEquals(newMail, after.getRegisteredEmail(),
+        "the SAVE must update the registered email");
+    assertTrue(after.hasTotpFactor(),
+        "the SAVE must NOT wipe the TOTP factor (core's default reconfigure rebuilds the "
+            + "property from the form JSON — the merge override must keep the seed)");
+    assertEquals(enSecret, after.getTotpSecret().getPlainText(),
+        "the TOTP seed must be byte-identical after SAVE");
+    assertEquals(trustedBefore, after.getTrustedUntilMs(),
+        "server-managed trust state must survive SAVE");
+    assertEquals(streakBefore, after.getFailedAttemptStreak(),
+        "telemetry state must survive SAVE");
+  }
+
+  /**
+   * Submit the security tab the way a real browser does after core's form JS
+   * serializes the rowSet DOM structure: a POST to
+   * {@code /user/<id>/security/configSubmit} carrying the {@code json}
+   * parameter ({@code {"userProperty<idx>": {…section fields…}}}) plus the
+   * crumb. With JS disabled in this client the DOM serialization cannot run,
+   * so the same wire shape is built by hand — including the rowSet index,
+   * computed EXACTLY as core's {@code doConfigSubmit} iterates
+   * ({@code UserProperty.allByCategoryClass(Security)} order, unfiltered).
+   * Asserts the submit lands with 200, i.e. NOT the live
+   * NoStaplerConstructorException 500.
+   */
+  private void submitSecurityForm(JenkinsRule.WebClient c, URL base, String user, String email)
+      throws Exception {
+    int idx = 0;
+    UserPropertyDescriptor ours = (UserPropertyDescriptor) Jenkins.get().getDescriptorOrDie(MfaUserProperty.class);
+    for (UserPropertyDescriptor d
+        : UserProperty.allByCategoryClass(UserPropertyCategory.Security.class)) {
+      if (d == ours) {
+        break;
+      }
+      idx++;
+    }
+    JSONObject section = new JSONObject();
+    section.put("unused", true); // the section's invisibleEntry dummy
+    section.put("registeredEmail", email);
+    JSONObject formJson = new JSONObject();
+    formJson.put("userProperty" + idx, section);
+
+    String crumb = mfaCrumb(c, base);
+    WebRequest req = new WebRequest(href(base, securityPath(user) + "configSubmit"),
+        HttpMethod.POST);
+    List<NameValuePair> params = new ArrayList<>();
+    params.add(new NameValuePair(crumbName, crumb));
+    params.add(new NameValuePair("json", formJson.toString()));
+    req.setRequestParameters(params);
+    WebResponse resp;
+    try {
+      resp = c.loadWebResponse(req);
+    } catch (FailingHttpStatusCodeException e) {
+      resp = e.getResponse();
+    }
+    assertEquals(200, resp.getStatusCode(),
+        "configSubmit must succeed (the live bug answered 500 for a fresh user): "
+            + resp.getStatusCode() + " " + head(resp.getContentAsString()));
+  }
+
+  // ==================================================================
   // Helpers.
   // ==================================================================
 
@@ -771,8 +1080,43 @@ class MfaProfileIT {
       resp = e.getResponse();
     }
     assertEquals(200, resp.getStatusCode(),
-        "a /mfa profile endpoint must answer its 200 JSON envelope: " + resp.getStatusCode());
+        "a /mfa profile endpoint must answer its 200 JSON envelope: " + resp.getStatusCode()
+            + " body=" + resp.getContentAsString());
     return JSONObject.fromObject(resp.getContentAsString());
+  }
+
+  /**
+   * A POST through a bare {@link java.net.HttpURLConnection} — no cookie
+   * jar, no redirect follow, and crucially NO client-side retry. Used where
+   * the contract under test is exactly "one request, one envelope" (the
+   * persistence-failure case: HtmlUnit's stack re-drove that one response
+   * shape, which is a client quirk, not server behaviour).
+   */
+  private String[] rawPost(URL base, String path, String cookieHeader, String... kv)
+      throws Exception {
+    java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+        new URL(base, path).openConnection();
+    conn.setRequestMethod("POST");
+    conn.setDoOutput(true);
+    conn.setInstanceFollowRedirects(false);
+    conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+    if (cookieHeader != null && !cookieHeader.isEmpty()) {
+      conn.setRequestProperty("Cookie", cookieHeader);
+    }
+    StringBuilder body = new StringBuilder();
+    for (int i = 0; i + 1 < kv.length; i += 2) {
+      if (body.length() > 0) {
+        body.append('&');
+      }
+      body.append(java.net.URLEncoder.encode(kv[i], java.nio.charset.StandardCharsets.UTF_8))
+          .append('=')
+          .append(java.net.URLEncoder.encode(kv[i + 1], java.nio.charset.StandardCharsets.UTF_8));
+    }
+    conn.getOutputStream().write(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    int status = conn.getResponseCode();
+    java.io.InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+    String text = in == null ? "" : new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+    return new String[]{String.valueOf(status), text};
   }
 
   private static String head(String s) {
