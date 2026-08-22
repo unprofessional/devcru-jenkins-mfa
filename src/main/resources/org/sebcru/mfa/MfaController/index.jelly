@@ -32,6 +32,14 @@
   Self-contained page: no external CSS/JS/CDN, no core layout dependency.
 -->
 <j:jelly xmlns:j="jelly:core" xmlns:x="jelly:xml" xmlns:st="jelly:stapler">
+  <!-- Content-Type MUST be declared: this page is a self-contained document
+       (no l:layout/l:view wrapper — the deliberate Task-8 shape), and that
+       wrapper is exactly where core pages pick up their Content-Type. Without
+       it the response ships NO Content-Type header at all, and with the
+       nosniff header below the browser renders the page as text/plain —
+       raw HTML source instead of the verify form (live incident
+       2026-08-22: "lmao moldy pls", screenshot of raw source). -->
+  <st:contentType value="text/html;charset=UTF-8"/>
   <st:setHeader name="Cache-Control" value="no-cache,no-store,must-revalidate"/>
   <st:setHeader name="X-Content-Type-Options" value="nosniff"/>
   <x:doctype name="html"/>
