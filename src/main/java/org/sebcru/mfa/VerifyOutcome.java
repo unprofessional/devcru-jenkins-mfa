@@ -43,6 +43,13 @@ public final class VerifyOutcome {
    */
   public static final String ERR_VERIFICATION_REQUIRED = "verification_required";
   public static final String ERR_SERVER = "server_error";
+  /**
+   * The mutation committed in memory but {@code User.save()} threw — the
+   * factor/trust is live for THIS session and will be LOST on restart.
+   * Reported honestly to the client (landmine fix, 2026-08-22: the old code
+   * swallowed the IOException and answered ok).
+   */
+  public static final String ERR_PERSISTENCE = "persistence_failed";
 
   private final boolean ok;
   private final String error;          // null on success

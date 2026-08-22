@@ -13,6 +13,7 @@ import hudson.model.userproperty.UserPropertyCategory;
 import hudson.security.FullControlOnceLoggedInAuthorizationStrategy;
 import hudson.security.HudsonPrivateSecurityRealm;
 import hudson.util.Secret;
+import java.io.File;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
@@ -266,6 +267,109 @@ class MfaProfileIT {
   // ==================================================================
   // Case c — disable/revoke: each endpoint flips exactly the right flag.
   // ==================================================================
+
+  /**
+   * WHAT: the persistence-failure path is HONEST, not silent (landmine fix,
+   * 2026-08-22). The old postEnrollConfirm swallowed the {@code u.save()}
+   * IOException and answered ok — the user walked away believing the factor
+   * was saved while it lived only in memory and died on restart (their
+   * authenticator app holding a dead secret). Now: the failure is logged
+   * SEVERE and the client gets {@code persistence_failed}; the in-memory
+   * property still carries the factor (this session keeps working), and a
+   * retry after the storage heals persists for real.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN a fresh user, postEnroll produced a seed, and the user's config
+   *       directory is read-only (User.save() will throw)
+   * WHEN  postEnrollConfirm is POSTed with the correct code
+   * THEN  the response is ok:false / error=persistence_failed (NOT ok:true)
+   * AND   the in-memory property still carries the seed (graceful degrade)
+   * WHEN  the directory is writable again and the user proves the factor at
+   *       the gate (the natural recovery)
+   * THEN  the gate verify's own save persists the property to disk
+   * </pre>
+   */
+  @Test
+  void enrollConfirmReportsPersistenceFailureHonestly(JenkinsRule rule) throws Exception {
+    String user = "it-prof-persist";
+    String pw = "secret123";
+    ensureRealm().createAccount(user, pw);
+    URL base = rule.getURL();
+
+    JenkinsRule.WebClient c = rule.createWebClient();
+    c.setJavaScriptEnabled(false);
+    c.setThrowExceptionOnFailingStatusCode(false);
+    c.login(user, pw);
+    String crumb = securityPageCrumb(c, base, user);
+
+    // Materialise the user's config directory (it is created lazily on the
+    // first save) so the test can make it read-only BEFORE the confirm.
+    User.getById(user, true).save();
+
+    JSONObject gen = postMfaProfile(c, base, "postEnroll", crumb);
+    assertTrue(gen.optBoolean("ok"), "postEnroll must succeed: " + gen);
+    String seed = gen.optString("seed");
+    byte[] key = Totp.decodeSecret(seed);
+    String goodCode = Totp.codeAt(key, System.currentTimeMillis());
+
+    // Make the user's config directory read-only so User.save() throws.
+    File usersRoot = new File(rule.jenkins.getRootDir(), "users");
+    File userDir = null;
+    String[] all = usersRoot.list();
+    // Jenkins sanitises the id for the directory name (hyphens dropped:
+    // "it-prof-persist" -> "itprofpersist_<hash>"), so match the sanitised
+    // prefix, not the raw id.
+    String sanitized = user.replaceAll("[^A-Za-z0-9_]", "");
+    File[] dirs = usersRoot.listFiles((d, n) -> n.startsWith(sanitized + "_"));
+    assertNotNull(dirs, "the users directory must exist");
+    assertEquals(1, dirs.length, "exactly one directory for the fresh user: " + usersRoot
+        + " (contents: " + java.util.Arrays.toString(all) + ")");
+    userDir = dirs[0];
+    assertTrue(userDir.setWritable(false, false),
+        "the test must be able to make the user dir read-only");
+    String cookies = c.getCookieManager().getCookies().stream()
+        .map(k -> k.getName() + "=" + k.getValue())
+        .collect(java.util.stream.Collectors.joining("; "));
+    try {
+      // Raw HTTP (not HtmlUnit): the persistence_failed JSON made the
+      // HtmlUnit/Apache stack re-drive the POST once (a client-side retry on
+      // this exact response shape), which turned the single honest answer
+      // into a second, A23-403'd dispatch. The server contract under test is
+      // one request -> one honest envelope, so pin it with a no-retry client.
+      String[] r = rawPost(base, "mfa/postEnrollConfirm", cookies,
+          this.crumbName, crumb, "seed", seed, "code", goodCode);
+      assertEquals("200", r[0], "the confirm must answer its JSON envelope: " + r[0] + " " + r[1]);
+      JSONObject rj = JSONObject.fromObject(r[1]);
+      assertFalse(rj.optBoolean("ok"),
+          "a failed save must NOT answer ok — that hides data loss: " + rj);
+      assertEquals(VerifyOutcome.ERR_PERSISTENCE, rj.optString("error"),
+          "the honest error code is persistence_failed: " + rj);
+
+      // Graceful degrade: the in-memory property carries the factor, so this
+      // session is not stranded.
+      MfaUserProperty inMemory = User.getById(user, true).getProperty(MfaUserProperty.class);
+      assertNotNull(inMemory, "the in-memory property must exist");
+      assertTrue(inMemory.hasTotpFactor(),
+          "the in-memory property still carries the factor after a failed save");
+      assertEquals(seed, inMemory.getTotpSecret().getPlainText(),
+          "the in-memory seed is exactly the presented one");
+    } finally {
+      assertTrue(userDir.setWritable(true, false), "restore writability");
+    }
+
+    // Storage healed. The natural recovery: the user proves the (in-memory)
+    // factor at the gate — that verify's own save persists everything the
+    // failed confirm could not (and marks the session verified, so a later
+    // confirm retry would also pass the A23 guard).
+    verifyTotpToPassGate(c, base, user, seed, "/");
+    File cfg = new File(userDir, "config.xml");
+    assertTrue(cfg.exists(), "the user config file must exist after the healed save");
+    String xml = new String(java.nio.file.Files.readAllBytes(cfg.toPath()),
+        java.nio.charset.StandardCharsets.UTF_8);
+    assertTrue(xml.contains("sebcru.mfa.MfaUserProperty"),
+        "the persisted config must carry the MFA property once storage heals");
+  }
 
   /**
    * WHAT: each of the three state-changing endpoints flips exactly the
@@ -976,8 +1080,43 @@ class MfaProfileIT {
       resp = e.getResponse();
     }
     assertEquals(200, resp.getStatusCode(),
-        "a /mfa profile endpoint must answer its 200 JSON envelope: " + resp.getStatusCode());
+        "a /mfa profile endpoint must answer its 200 JSON envelope: " + resp.getStatusCode()
+            + " body=" + resp.getContentAsString());
     return JSONObject.fromObject(resp.getContentAsString());
+  }
+
+  /**
+   * A POST through a bare {@link java.net.HttpURLConnection} — no cookie
+   * jar, no redirect follow, and crucially NO client-side retry. Used where
+   * the contract under test is exactly "one request, one envelope" (the
+   * persistence-failure case: HtmlUnit's stack re-drove that one response
+   * shape, which is a client quirk, not server behaviour).
+   */
+  private String[] rawPost(URL base, String path, String cookieHeader, String... kv)
+      throws Exception {
+    java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+        new URL(base, path).openConnection();
+    conn.setRequestMethod("POST");
+    conn.setDoOutput(true);
+    conn.setInstanceFollowRedirects(false);
+    conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+    if (cookieHeader != null && !cookieHeader.isEmpty()) {
+      conn.setRequestProperty("Cookie", cookieHeader);
+    }
+    StringBuilder body = new StringBuilder();
+    for (int i = 0; i + 1 < kv.length; i += 2) {
+      if (body.length() > 0) {
+        body.append('&');
+      }
+      body.append(java.net.URLEncoder.encode(kv[i], java.nio.charset.StandardCharsets.UTF_8))
+          .append('=')
+          .append(java.net.URLEncoder.encode(kv[i + 1], java.nio.charset.StandardCharsets.UTF_8));
+    }
+    conn.getOutputStream().write(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    int status = conn.getResponseCode();
+    java.io.InputStream in = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+    String text = in == null ? "" : new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+    return new String[]{String.valueOf(status), text};
   }
 
   private static String head(String s) {
