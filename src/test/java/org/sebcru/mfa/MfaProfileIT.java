@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import hudson.model.FreeStyleProject;
 import hudson.model.User;
+import hudson.model.UserProperty;
+import hudson.model.UserPropertyDescriptor;
+import hudson.model.userproperty.UserPropertyCategory;
 import hudson.security.FullControlOnceLoggedInAuthorizationStrategy;
 import hudson.security.HudsonPrivateSecurityRealm;
 import hudson.util.Secret;
@@ -593,6 +596,165 @@ class MfaProfileIT {
         "the trust record is untouched (postRevokeTrust was denied)");
     assertEquals(streakBefore, after.getFailedAttemptStreak(),
         "no telemetry side effects from a denied request");
+  }
+
+  // ==================================================================
+  // Case f — the security-tab SAVE (live incident, jenkins.devcru.org
+  //   2026-08-22): configSubmit must not 500 for a fresh user, must not
+  //   wipe factor state for an enrolled user, and the section's JS
+  //   bindings must resolve (not render the literal expression names).
+  // ==================================================================
+
+  /**
+   * WHAT: the two live bugs from the first production deploy, pinned end
+   * to end against core's REAL form. (1) A fresh user saving the security
+   * tab with a registered email 500'd: core's {@code doConfigSubmit} takes
+   * the {@code d.newInstance(req, o)} path when no property exists yet, and
+   * Stapler databinding refuses a class with no {@code @DataBoundConstructor}
+   * ({@code NoStaplerConstructorException}). (2) The section's JS read its
+   * crumb/endpoint-base helpers off {@code it} — which in core's security
+   * include scope is the TARGET USER, not the descriptor — so the rendered
+   * page carried the LITERAL strings "mfaBaseUrl"/"mfaCrumbValue" and every
+   * button fetched a garbage relative URL ("Generate new code does
+   * nothing"). And the latent third: core's default {@code reconfigure}
+   * rebuilds the property from the submitted JSON, which for an enrolled
+   * user would silently WIPE the TOTP seed on every SAVE — the merge
+   * override must keep it.
+   *
+   * <p>BDD:
+   * <pre>
+   * GIVEN a fresh user (no property) logged in
+   * WHEN  the real security-tab form is submitted with a registered email
+   * THEN  the submit succeeds (no 500) and the property now has that email
+   * GIVEN an enrolled user (TOTP seed + registered email), verified past
+   *       the gate
+   * WHEN  the same form is submitted with a CHANGED email
+   * THEN  the email updates AND the TOTP seed / trust / telemetry are
+   *       byte-identical (reconfigure merges, never rebuilds)
+   * AND   the rendered section HTML carries the RESOLVED JS bindings
+   *       (an absolute .../mfa/ base, a real crumb field/value) and never
+   *       the literal names "mfaBaseUrl" / "mfaCrumbField" / "mfaCrumbValue"
+   * </pre>
+   *
+   * <p>WHY/SOLVES: the render-presence case (a) proves the section EXISTS;
+   * this case proves it WORKS — a present-but-unbound section is exactly the
+   * shape that shipped to production (green IT, dead buttons, 500 on SAVE).
+   * Submitting core's actual form (not a hand-built parameter list) is what
+   * makes the rowSet indexing and the {@code _.} field naming faithful to
+   * the browser.
+   */
+  @Test
+  void securityTabSaveCreatesBindsAndNeverWipesFactorState(JenkinsRule rule) throws Exception {
+    String fresh = "it-prof-save-fresh";
+    String enrolled = "it-prof-save-enrolled";
+    String pw = "secret123";
+    String enSecret = Totp.newBase32Secret();
+    String enMail = enrolled + "@devcru.example";
+    User eu = enrollTotp(enrolled, pw, enSecret);
+    MfaUserProperty ep0 = MfaUserProperty.getOrCreate(eu);
+    ep0.setRegisteredEmail(enMail);
+    eu.save();
+    ensureRealm().createAccount(fresh, pw);
+    rule.createProject(FreeStyleProject.class, "it-prof6-job");
+    URL base = rule.getURL();
+
+    // -- Fresh user: SAVE must create the property, not 500.
+    JenkinsRule.WebClient cf = rule.createWebClient();
+    cf.setJavaScriptEnabled(false);
+    cf.setThrowExceptionOnFailingStatusCode(false);
+    cf.login(fresh, pw);
+    String freshMail = fresh + "@devcru.example";
+    submitSecurityForm(cf, base, fresh, freshMail);
+    MfaUserProperty freshProp = User.getById(fresh, true).getProperty(MfaUserProperty.class);
+    assertNotNull(freshProp,
+        "a fresh user's SAVE must create the property via the @DataBoundConstructor "
+            + "path (live bug: NoStaplerConstructorException -> 500)");
+    assertEquals(freshMail, freshProp.getRegisteredEmail(),
+        "the submitted registered email must be data-bound onto the new property");
+
+    // -- Enrolled user: the rendered bindings must resolve, and SAVE must
+    //    merge the email without touching factor state.
+    JenkinsRule.WebClient ce = rule.createWebClient();
+    ce.setJavaScriptEnabled(false);
+    ce.setThrowExceptionOnFailingStatusCode(false);
+    ce.login(enrolled, pw);
+    verifyTotpToPassGate(ce, base, enrolled, enSecret, "/job/it-prof6-job/");
+    String html = securityPageHtml(ce, base, enrolled);
+    assertTrue(html.contains("id=\"mfaSection\""), "precondition: section renders");
+    assertFalse(html.contains("\"mfaBaseUrl\"") || html.contains("\"mfaCrumbField\"")
+            || html.contains("\"mfaCrumbValue\""),
+        "the section's JS bindings must RESOLVE against the descriptor — the live bug "
+            + "rendered the literal expression names because the jelly read them off 'it' "
+            + "(the target user) instead of 'descriptor': " + head(html));
+    assertTrue(html.contains("var BASE = \"" + base + "mfa/\""),
+        "the JS endpoint base must be the absolute rootUrl + mfa/ (live bug: literal 'mfaBaseUrl' "
+            + "made every button fetch a garbage relative URL): " + head(html));
+
+    MfaUserProperty before = User.getById(enrolled, true).getProperty(MfaUserProperty.class);
+    long trustedBefore = before.getTrustedUntilMs();
+    int streakBefore = before.getFailedAttemptStreak();
+    String newMail = enrolled + "-new@devcru.example";
+    submitSecurityForm(ce, base, enrolled, newMail);
+    MfaUserProperty after = User.getById(enrolled, true).getProperty(MfaUserProperty.class);
+    assertNotNull(after, "the property must survive its own SAVE");
+    assertEquals(newMail, after.getRegisteredEmail(),
+        "the SAVE must update the registered email");
+    assertTrue(after.hasTotpFactor(),
+        "the SAVE must NOT wipe the TOTP factor (core's default reconfigure rebuilds the "
+            + "property from the form JSON — the merge override must keep the seed)");
+    assertEquals(enSecret, after.getTotpSecret().getPlainText(),
+        "the TOTP seed must be byte-identical after SAVE");
+    assertEquals(trustedBefore, after.getTrustedUntilMs(),
+        "server-managed trust state must survive SAVE");
+    assertEquals(streakBefore, after.getFailedAttemptStreak(),
+        "telemetry state must survive SAVE");
+  }
+
+  /**
+   * Submit the security tab the way a real browser does after core's form JS
+   * serializes the rowSet DOM structure: a POST to
+   * {@code /user/<id>/security/configSubmit} carrying the {@code json}
+   * parameter ({@code {"userProperty<idx>": {…section fields…}}}) plus the
+   * crumb. With JS disabled in this client the DOM serialization cannot run,
+   * so the same wire shape is built by hand — including the rowSet index,
+   * computed EXACTLY as core's {@code doConfigSubmit} iterates
+   * ({@code UserProperty.allByCategoryClass(Security)} order, unfiltered).
+   * Asserts the submit lands with 200, i.e. NOT the live
+   * NoStaplerConstructorException 500.
+   */
+  private void submitSecurityForm(JenkinsRule.WebClient c, URL base, String user, String email)
+      throws Exception {
+    int idx = 0;
+    UserPropertyDescriptor ours = (UserPropertyDescriptor) Jenkins.get().getDescriptorOrDie(MfaUserProperty.class);
+    for (UserPropertyDescriptor d
+        : UserProperty.allByCategoryClass(UserPropertyCategory.Security.class)) {
+      if (d == ours) {
+        break;
+      }
+      idx++;
+    }
+    JSONObject section = new JSONObject();
+    section.put("unused", true); // the section's invisibleEntry dummy
+    section.put("registeredEmail", email);
+    JSONObject formJson = new JSONObject();
+    formJson.put("userProperty" + idx, section);
+
+    String crumb = mfaCrumb(c, base);
+    WebRequest req = new WebRequest(href(base, securityPath(user) + "configSubmit"),
+        HttpMethod.POST);
+    List<NameValuePair> params = new ArrayList<>();
+    params.add(new NameValuePair(crumbName, crumb));
+    params.add(new NameValuePair("json", formJson.toString()));
+    req.setRequestParameters(params);
+    WebResponse resp;
+    try {
+      resp = c.loadWebResponse(req);
+    } catch (FailingHttpStatusCodeException e) {
+      resp = e.getResponse();
+    }
+    assertEquals(200, resp.getStatusCode(),
+        "configSubmit must succeed (the live bug answered 500 for a fresh user): "
+            + resp.getStatusCode() + " " + head(resp.getContentAsString()));
   }
 
   // ==================================================================
