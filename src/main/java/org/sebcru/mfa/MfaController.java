@@ -281,6 +281,30 @@ public class MfaController implements RootAction {
     }
   }
 
+  /**
+   * The URL of this page's static JS file — {@code <root>/plugin/
+   * devcru-mfa/mfa-gate.js}. Jenkins' CSP is {@code script-src 'self'}
+   * (no 'unsafe-inline'), so the verify-form script cannot live inline in
+   * index.jelly — it never executes there. Same fix, same incident
+   * (2026-08-22) as the section's {@code mfa-section.js}: without it the
+   * gate page renders but can never POST a code — an enrolment-time
+   * lockout. A plain script tag with this URL is same-origin and CSP-clean;
+   * the root-URL policy is core's ({@code Jenkins.getRootUrl()}), with the
+   * context-relative fallback for pre-boot.
+   */
+  public String getGateScriptUrl() {
+    try {
+      String root = jenkins.model.Jenkins.get().getRootUrl();
+      if (root == null) {
+        return "plugin/devcru-mfa/mfa-gate.js";
+      }
+      String b = root.endsWith("/") ? root : root + "/";
+      return b + "plugin/devcru-mfa/mfa-gate.js";
+    } catch (RuntimeException e) {
+      return "plugin/devcru-mfa/mfa-gate.js";
+    }
+  }
+
   // ---------------------------------------------------------------------
   // POST endpoints. Core's crumb filter + @RequirePOST guard them; this is
   // belt-and-suspenders on method, not on policy. The page embeds the hidden
