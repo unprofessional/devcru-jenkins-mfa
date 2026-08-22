@@ -18,7 +18,15 @@
           try {
             redirectParam = (new URLSearchParams(window.location.search)).get("redirect");
           } catch (e) { redirectParam = null; }
-          var lockUntil = 0;
+          // Two SEPARATE timers (live jank fix, 2026-08-22 round 5): the
+          // server lockout after a wrong-code streak locks BOTH buttons, but
+          // the resend cooldown locks ONLY the Send-code button — verifying
+          // does not issue a new code, so a user whose email arrives fast
+          // must not sit out the resend cooldown staring at a dead Verify
+          // button (the exact complaint: "entering the code does not enable
+          // Verify... took a while... janky").
+          var lockUntil = 0;       // wrong-code lockout -> locks BOTH buttons
+          var resendLockUntil = 0; // resend cooldown   -> locks Send-code only
 
           var MESSAGES = {
             wrong_code: "That code is not correct.",
@@ -41,18 +49,27 @@
             msgEl.className = "msg hidden";
             msgEl.textContent = "";
           }
-          // Drives the visible countdown span AND the lockUntil timer. The
-          // timer is the source of truth for re-enabling the buttons; the
+          // Drives the visible countdown span AND the lock timers. The
+          // timers are the source of truth for re-enabling the buttons; the
           // span is absent for accounts without the email factor, so every
-          // write is guarded.
-          function startCountdown(seconds) {
-            lockUntil = now() + seconds * 1000;
-            var t0 = now();
+          // write is guarded. resendOnly=true arms ONLY the resend cooldown
+          // (Verify stays live); the default arms the wrong-code lockout
+          // (both buttons).
+          function startCountdown(seconds, resendOnly) {
+            var until = now() + seconds * 1000;
+            if (resendOnly) {
+              resendLockUntil = Math.max(resendLockUntil, until);
+            } else {
+              lockUntil = Math.max(lockUntil, until);
+            }
             if (cooldownEl) { cooldownEl.hidden = false; }
             function tick() {
-              var left = Math.max(0, Math.ceil((lockUntil - now()) / 1000));
+              var leftLock = Math.max(0, Math.ceil((lockUntil - now()) / 1000));
+              var leftResend = Math.max(0, Math.ceil((resendLockUntil - now()) / 1000));
+              var left = Math.max(leftLock, leftResend);
               if (left <= 0) {
                 lockUntil = 0;
+                resendLockUntil = 0;
                 if (cooldownEl) {
                   cooldownEl.hidden = true;
                   cooldownEl.textContent = "";
@@ -71,7 +88,9 @@
           function refreshButtons() {
             var locked = lockUntil > now();
             verifyBtn.disabled = locked;
-            if (resendBtn) { resendBtn.disabled = locked; }
+            if (resendBtn) {
+              resendBtn.disabled = locked || resendLockUntil > now();
+            }
           }
 
           function formData(payload) {
@@ -140,15 +159,16 @@
 
           if (resendBtn) {
             resendBtn.addEventListener("click", function () {
-              if (lockUntil > now()) {
-                startCountdown(Math.ceil((lockUntil - now()) / 1000));
+              if (lockUntil > now() || resendLockUntil > now()) {
+                startCountdown(Math.ceil(Math.max(lockUntil, resendLockUntil) - now()) / 1000,
+                    resendLockUntil > lockUntil);
                 return;
               }
               resendBtn.disabled = true;
               postForm("postResendEmail", {}).then(function (res) {
                 if (res.ok) {
                   showMsg("ok", "A fresh code is on its way. It stays valid for a few minutes.");
-                  startCountdown(res.cooldown || 60);
+                  startCountdown(res.cooldown || 60, true); // resend cooldown != verify lockout
                 } else if (res.error === "resend_cooldown" && res.retrySeconds) {
                   showMsg("error", MESSAGES.resend_cooldown);
                   startCountdown(res.retrySeconds);
