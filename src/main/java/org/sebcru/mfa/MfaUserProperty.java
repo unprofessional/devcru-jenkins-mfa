@@ -1,6 +1,7 @@
 package org.sebcru.mfa;
 
 import hudson.Extension;
+import hudson.model.Descriptor;
 import hudson.model.User;
 import hudson.model.UserProperty;
 import hudson.model.UserPropertyDescriptor;
@@ -8,6 +9,8 @@ import hudson.model.userproperty.UserPropertyCategory;
 import hudson.security.csrf.CrumbIssuer;
 import hudson.util.Secret;
 import java.io.IOException;
+import net.sf.json.JSONObject;
+import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.StaplerRequest2;
 
@@ -76,7 +79,21 @@ public class MfaUserProperty extends UserProperty {
   /** Epoch ms of the last code issue/resend (drives the resend cooldown). */
   private long lastResendAt;
 
-  /** No-arg constructor for XStream deserialization and direct construction. */
+  /**
+   * No-arg constructor for XStream deserialization and direct construction.
+   *
+   * <p>{@code @DataBoundConstructor} is REQUIRED for the security-tab form:
+   * core's {@code UserPropertyCategoryAction.doConfigSubmit} binds this
+   * section's rowSet via Stapler databinding, which refuses to instantiate a
+   * class with no annotated constructor (NoStaplerConstructorException → 500
+   * on SAVE). Found live on jenkins.devcru.org 2026-08-22: the no-arg
+   * constructor existed but was unannotated, so every email-address SAVE
+   * 500'd. With the annotation here, binding instantiates via this
+   * constructor and applies ONLY the {@code @DataBoundSetter} field
+   * ({@code registeredEmail}) — the server-managed fields stay unreachable
+   * by form binding exactly as the class-level note describes.
+   */
+  @DataBoundConstructor
   public MfaUserProperty() {
     super();
   }
@@ -146,6 +163,31 @@ public class MfaUserProperty extends UserProperty {
   @DataBoundSetter
   public void setRegisteredEmail(String registeredEmail) {
     this.registeredEmail = registeredEmail;
+  }
+
+  /**
+   * configSubmit merge (live-bug fix, 2026-08-22). Core's
+   * {@code UserPropertyCategoryAction.doConfigSubmit} calls
+   * {@code reconfigure} on an EXISTING property, and core's default
+   * implementation rebuilds a fresh instance from the submitted JSON —
+   * which for this class would silently WIPE the enrolled TOTP seed, the
+   * email-code HMAC key, and all trust/telemetry state every time an
+   * enrolled user saves the security tab (the form only carries
+   * {@code registeredEmail}). Instead: merge the one user-facing field the
+   * form owns into THIS instance and keep everything else untouched. The
+   * TOTP seed stays single-writer (postEnrollConfirm only), exactly as the
+   * class-level data-binding note requires.
+   *
+   * <p>Never returns null here: dropping the property on a null/absent form
+   * would destroy factor state as a side effect of an unrelated save.
+   */
+  @Override
+  public UserProperty reconfigure(StaplerRequest2 req, JSONObject form) throws Descriptor.FormException {
+    if (form != null) {
+      String email = form.optString("registeredEmail", "");
+      this.registeredEmail = (email == null || email.isBlank()) ? null : email.trim();
+    }
+    return this;
   }
 
   public Secret getEmailCodeSecret() {
@@ -220,10 +262,13 @@ public class MfaUserProperty extends UserProperty {
   // "empty section, green build, the QR never works" silent failure the IT's
   // render-presence case guards. The request-scoped helpers the section's
   // JS needs (crumb field/value, the /mfa/ endpoint base) live on
-  // DescriptorImpl instead: the descriptor is bound as it in the section's
-  // include (see core's UserPropertyCategory*Action views) and is ALWAYS
-  // non-null, so the section can reach them without ever touching a null
-  // instance.
+  // DescriptorImpl instead: the descriptor is bound as "descriptor" in the
+  // section's include (verified 2026-08-22 against core's
+  // UserPropertyCategorySecurityAction/index.jelly — "it" there is the
+  // TARGET USER, not the descriptor; the original bound-as-it assumption
+  // rendered the literal expression names and killed the section's JS on
+  // the live box) and is ALWAYS non-null, so the section can reach them
+  // without ever touching a null instance.
   // ---------------------------------------------------------------------
 
   /** Masked registered mailbox for display (e.g. {@code m***@devcru.org}). Empty — not null — when not enrolled. */
@@ -317,6 +362,22 @@ public class MfaUserProperty extends UserProperty {
       } catch (RuntimeException e) {
         return "mfa/";
       }
+    }
+
+    /**
+     * The URL of the section's static JS file — {@code <root>/plugin/
+     * devcru-mfa/mfa-section.js}. Jenkins' CSP is {@code script-src 'self'}
+     * (no 'unsafe-inline'), so the section's script cannot live inline in
+     * config.jelly — it never executes there (live incident 2026-08-22:
+     * every button dead, zero Network-tab activity). A plain script tag
+     * with this URL is same-origin and CSP-clean. Derived from
+     * {@link #getMfaBaseUrl()} so the root-URL policy (and its pre-boot
+     * fallback) stays in one place.
+     */
+    public String getMfaSectionScriptUrl() {
+      String b = getMfaBaseUrl();
+      return b.substring(0, b.length() - "mfa/".length())
+          + "plugin/devcru-mfa/mfa-section.js";
     }
 
     @Override

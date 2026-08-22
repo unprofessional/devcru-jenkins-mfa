@@ -133,7 +133,15 @@ public final class MfaFilter implements Filter {
     "/j_acegi",
     "/mfa",                // the MFA page itself (Defect B: /securityRealm/*
                            // is the live realm's own mount, not ours)
-    "/static/", "/images/", "/adjuncts/", "/scripts/", "/css/", "/crumbIssuer"
+    "/static/", "/images/", "/adjuncts/", "/scripts/", "/css/", "/crumbIssuer",
+    // THIS plugin's own static assets (live incident 2026-08-22 round 4): the
+    // gate page's verify-form JS is served from /plugin/devcru-mfa/ (CSP
+    // script-src 'self' forbids inline scripts). Without this prefix a gated
+    // session's request for mfa-gate.js 302s back to the gate page, the
+    // "script" comes back as text/html, Chrome refuses to execute it, and the
+    // Verify button is dead — the gate bricks its own key. Scoped to THIS
+    // plugin's assets only; other plugins' paths stay gated.
+    "/plugin/devcru-mfa/"
   };
 
   /** Stateless; one process-wide instance lives in {@link DevcruMfaPlugin}. */
