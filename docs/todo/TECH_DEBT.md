@@ -641,6 +641,14 @@ the full deviation record.
 
 ## Not in the code yet (planned work, not debt)
 
+- **A22-b completion — restart-survival leg (spec §7 case 3, §10).** The
+  credential-clear's persistence is seam-pinned (`clearFactorState`
+  byte-for-byte) and `target.save()` is called, but nothing yet proves the
+  persisted clear SURVIVES a Jenkins restart. Spec §7 called the restart leg
+  (clear → `rule.restart()` → victim logs in password-only → re-enrolls)
+  "not negotiable for a credential-clearing op." Add it to `MfaAdminIT`
+  before cutover. Moldy review 2026-08-23: the one open item standing between
+  "merged" and "live-ready." Tracked in the A22-b handoff §1 as the next task.
 - **A24 — force-enrol view (Ruling 4's "for now" companion).** When an admin
   enforces MFA fleet-wide (policy `REQUIRED` + every user enrolled) the
   enrolled-only roster at `/mfaAdmin` goes empty, but the admin still needs a
