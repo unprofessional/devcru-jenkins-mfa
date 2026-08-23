@@ -112,7 +112,9 @@ architecture & design-decision record used to audit the code.
 > security tab is core's admin-facing page — see "Enrolling your factors"
 > below). The live cutover to the production box landed 2026-08-22
 > (Task 10); the admin recovery surface (clear/revoke *another* user's
-> factors, TECH_DEBT A22-b) landed 2026-08-23 — see the "Admin recovery
+> factors, TECH_DEBT A22-b) landed 2026-08-23 — including the restart
+> -survival proof (a cleared user stays cleared across a Jenkins restart,
+> and re-enrols end to end after it) — see the "Admin recovery
 > path" paragraph above the project-doc index.
 
 ### Enrolling
@@ -264,7 +266,10 @@ architecture & design-decision record used to audit the code.
   does a not-yet-enrolled user (they are passed by the gate and must keep
   self-enrolment access).
 - **Lost everything (lost phone and mailbox).** Documented admin recovery
-  path clears the user's stored factor state; the user re-enrolls. No
+  path clears the user's stored factor state; the user re-enrolls. The clear
+  is persisted — the unenrolled state survives a Jenkins restart, and the
+  re-enrolment completes end to end after it (booted-test proven, the
+  restart-survival leg of the A22-b admin IT). No
   self-service reset, by design — now *enforced*: a session that has not
   freshly proven a factor (or holds live trust) gets a 403 from every
   factor-management endpoint, so "reset everything" by password alone is
