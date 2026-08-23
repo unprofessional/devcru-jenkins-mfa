@@ -39,9 +39,22 @@ authenticator app, the real theme, a real restart). Full analysis and the
 extracted rules:
 [`docs/2026-08-22-postmortem-live-rollout.md`](docs/2026-08-22-postmortem-live-rollout.md).
 
-**Known gap:** there is no admin UI for managing *other users'* factors
-(TECH_DEBT A22-b) — the documented recovery path for a locked-out user
-requires an admin to clear factor state, and that surface is not built yet.
+**Admin recovery path (A22-b, landed 2026-08-23):** an admin (a
+`Jenkins.ADMINISTER` holder who has verified their own second factor this
+login or is on a remembered device) can open <root>/mfaAdmin and read the
+enrolled-user roster, and on it: **Clear factors** (removes the target's
+TOTP seed, email factor, registered mailbox, remembered-device trust, and
+any pending code/lockout state in one pass) or **Revoke trust** (removes
+only the remembered-device trust, factors stay). Both verbs require the
+admin to type the target's user id in a confirmation dialog — a
+server-side check, not just a browser form field — and neither can be
+pointed at the admin's own account (self-service is the only path for that).
+An admin who is logged in but has not verified this session is bounced to
+the MFA page before they can reach the roster (the admin surface is
+deliberately NOT on the gate's allow-list, so the mutation endpoints are
+unreachable pre-verify at every layer). Both operations write a single
+loud audit line to the log. The spec and rulings:
+[`docs/todo/2026-08-23-A22b-admin-factor-management-spec.md`](docs/todo/2026-08-23-A22b-admin-factor-management-spec.md).
 
 What follows documents the built system as it landed through Task 8.
 
@@ -98,8 +111,9 @@ architecture & design-decision record used to audit the code.
 > known edge is *who can open that screen on a given install* (the
 > security tab is core's admin-facing page — see "Enrolling your factors"
 > below). The live cutover to the production box landed 2026-08-22
-> (Task 10); the remaining functional gap is admin management of *other
-> users'* factors (TECH_DEBT A22-b, not built).
+> (Task 10); the admin recovery surface (clear/revoke *another* user's
+> factors, TECH_DEBT A22-b) landed 2026-08-23 — see the "Admin recovery
+> path" paragraph above the project-doc index.
 
 ### Enrolling
 
@@ -126,8 +140,10 @@ architecture & design-decision record used to audit the code.
   re-enrolled account starts clean) and *Revoke this device's trust*
   (sign everyone else out again; the current session ends the trust itself).
   An admin clearing someone's factors entirely for a full lockout is the
-  documented recovery path — there is no self-service "reset everything",
-  by design.
+  documented recovery path — see the "Admin recovery path" paragraph above
+  (the `/mfaAdmin` surface, admin-only + this-session-verified or
+  remembered-device, with a typed-id confirmation). There is no
+  self-service "reset everything", by design.
 - **Who can open that section on a given install:** it is the core-security
   tab, which core renders only to holders of the *Overall/Administer*
   permission. On this project's target setup (a single admin, `mads`) that
