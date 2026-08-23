@@ -1,6 +1,7 @@
 # A22-b spec — Admin management of other users' factors
 
-> **Status: SPEC — awaiting mads review. No implementation in this branch.**
+> **Status: RULINGS RECEIVED (mads, 2026-08-23) — implementing in this
+> branch. §9 resolved as below.**
 > **Branch:** `a22b-spec` (off `develop` @ `e671384`)
 > **Debt entry:** `docs/todo/TECH_DEBT.md` § "A22" (A22-b) + "Not in the code yet"
 > **Named because:** the README's documented lockout-recovery path ("an admin
@@ -309,34 +310,40 @@ Filled at spec time with the probes available on this repo; slots marked
 | Time | Best case (one click), worst case (the admin clears the wrong user — the roster must be unambiguous: user id + masked mailbox + which factors are present, all in the row next to the button), impatient (double-click clears) | Roster layout above; the JS POSTs are single-flight (button disabled during flight, the six-endpoints' JS already does this) | Designed; the double-click idempotency is a free consequence of the JSON contract (a second clear on an already-cleared user is `not_enrolled`, not an error state — the IT asserts that shape in case 3's tail). |
 | Restart | What survives: the target's cleared property (persisted by `target.save()`); the admin's trust (untouched — the admin keeps their session + their browser trust; clearing a *victim* never touches the admin); what breaks: nothing by design (the one destructive op is persisted or it says so, §5) | IT case 3's post-clear victim re-login (the box keeps running; the property is on disk); the §5 honesty rule | Green at spec at the seam level; the full restart leg (clear → `rule.restart()` → victim login → re-enroll) **joins IT case 3 before landing** — the postmortem's restart lesson is not negotiable for a credential-clearing op. |
 
-## 9. Rulings required from mads before implementation
+## 9. Rulings (mads, 2026-08-23) — received and binding
 
-1. **Shape: (A) new admin page (recommended, this spec) vs (B) parameterise
-   the six profile endpoints.** If (B), §6's surface inventory is
-   redrawn: target parameter + `adminManagementAllowed` on the six
-   endpoints, a roster still needed (the page survives), and the A23 IT's
-   allow-list reasoning extended. Estimate (B) at ~equal code, *higher*
-   regression risk on live endpoints, and a weaker audit story.
-2. **Verb set:** this spec ships **clear-all** + **revoke-trust**. Is a
-   per-factor admin disable (totp-only / email-only) wanted, or is
-   whole-clear-plus-self-service the right boundary (spec: the latter —
-   decision 7's recovery path is the whole clear, and partial surgery is
-   what a user can and should do to their own account)?
-3. **The unenrolled-admin edge (§4 last paragraph):** an admin account with
-   no enrolled factor can *see* the roster but *cannot* clear/revoke
-   (they cannot carry verify/trust). Spec holds: deny. **Ruling: accept, or
-   soften (e.g. ADMINISTER alone suffices for the roster read, which is
-   already the case — or grant unenrolled admins the write, which the spec
-   *opposes* on the "you must be able to hold a credential to clear
-   credentials" argument)?**
-4. **Roster scope:** enrolled users only (spec) vs every user who ever had
-   a property. Spec: enrolled-only; the unenrolled cannot be locked out so
-   they need no row.
-5. **Confirm UX:** browser `confirm()` (spec, zero dependency, the
-   postmortem-era style) vs a typed-user-id confirmation for the destructive
-   verb (one more keystroke, the "you were not in a hurry" check). The
-   typed-id variant is the spec's *preferred* for `clearFactors` given it
-   is the one irreversible op; `confirm()` for revoke. **Ruling.**
+1. **Shape: (A) new page** — "new page for sure". Implemented as specified:
+   `MfaAdminController` at mount `/mfaAdmin`, separate surface, six profile
+   endpoints untouched.
+2. **Verb set: clear-all + revoke-trust only — "yes, for now"**, explicitly
+   provisional (see ruling 4: a third verb — force-enrol — is the follow-up
+   that reuses this page, plus a first-time-login MFA setup screen; both
+   deferred by mads).
+3. **The unenrolled-admin edge: DENY.** An admin account with no enrolled
+   factor can read the roster (ADMINISTER) but cannot clear/revoke — the
+   spec's "you must be able to hold a credential to clear credentials" line
+   holds. Pinned by the seam quadrilateral + an IT.
+4. **Roster scope: enrolled-only — FOR NOW**, because the *next* item reuses
+   this roster as the force-enrolment surface (a checkbox + save that enrols
+   a factor for an unenrolled user — a THIRD verb beyond ruling 2 — plus a
+   first-time-login MFA setup screen). Two design consequences for THIS
+   landing, chosen so the follow-up does not force a rework:
+   - the roster render model is a pure row-list built from the live users,
+     so the third verb can add checkbox state/columns without a new page;
+   - the endpoints take `userId` + operation, not a row-index, so per-row
+     future actions map to the same wire shape.
+   The follow-up is tracked in TECH_DEBT as a successor item (A24), not
+   implemented here.
+5. **Destructive-verb UX: 100% typed user-id confirmation** — mads: "100%
+   user typed confirmation". The `clearFactors` form requires typing the
+   target user's exact id before the POST fires, and **the endpoint
+   re-checks the typed value matches the target server-side** (typed-id is
+   not just UX — a client-side-only check is bypassable). `revokeTrust` takes
+   the same typed-id confirmation: one rule for the whole surface, no
+   lighter confirmation hiding behind a "less destructive" label.
+
+The five original questions this resolved remain recoverable from git history
+(this file's first revision); the rulings above are the binding record.
 
 ## 10. Acceptance (definition of done, per the postmortem discipline)
 
