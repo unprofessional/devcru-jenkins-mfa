@@ -9,28 +9,41 @@ paywalled UI) on `jenkins.devcru.org` (Jenkins 2.577, Local Security Realm).
 
 ## Status
 
-Tasks 0–8 complete: toolchain + scaffold, RFC 6238 TOTP core (TDD against
-RFC 4226/6238 vectors), per-user factor state, the email-code factor
-(generation, hashing, single-use, expiry, resend throttle), the two gate
-brains — the remembered-device trust (24 h policy floor) and the per-user
-rate limiter / lockout (sliding 30-minute failure window, 5 attempts,
-15-minute lockout that cannot be extended by retries) — the admin
-configuration surface (Manage Jenkins → Security: policy, issuer, trust
-windows, rate-limit knobs, exempt users), the MFA controller (the login
-screen at the plugin's MFA page — `/mfa` on the live box, with its two POST
-endpoints — TOTP or email
-code verification, and email-code resend via Jenkins' standard Mailer — the
-shape-based factor router, the open-redirect-safe "back to where you were"
-redirect resolver, and session fix-up on success), and the MFA gate filter
-itself: the request path the login flow actually takes, registered at
-startup, that enforces the whole policy (kill switch, API-token exemption,
-auth-flow/static allow-list, exemption list, unenrolled pass-through,
-verified-session-OR-remembered-trust) and bounces everyone else to the MFA
-page with their real destination carried in the URL. The gate's decision
-table is unit-tested branch-by-branch; the filter's live-registration and
-302 wiring are exercised by the plugin's own `InjectedTest` Jenkins-in-JVM
-boot, which now runs with the filter active. Only the enrolment/management
-UI (Task 9) remains outstanding per the plan in this repo ([`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md)).
+**LIVE on `jenkins.devcru.org` since 2026-08-22** (version 1.0.0; cutover
+runbook:
+[`docs/done/2026-08-19-task10-handoff.md`](docs/done/2026-08-19-task10-handoff.md)).
+All planned tasks 0–10 have landed: toolchain + scaffold, RFC 6238 TOTP core
+(TDD against RFC 4226/6238 vectors), per-user factor state, the email-code
+factor (generation, hashing, single-use, expiry, resend throttle), the two
+gate brains — remembered-device trust (24 h policy floor) and the per-user
+rate limiter / lockout — the admin configuration surface, the MFA controller
+(the login screen at `/mfa` with its verify/resend endpoints, the
+shape-based factor router, the open-redirect-safe redirect resolver, and
+session fix-up on success), the MFA gate filter (kill switch, API-token
+exemption, auth-flow/static allow-list, exemption list, unenrolled
+pass-through, verified-session-OR-remembered-trust), the user-facing
+factor-management UI (Task 9), and the production cutover (Task 10).
+
+Two post-plan landings are part of the live system: **A21** — the home-grown
+Bearer API-token authenticator (`X-Jenkins-User` companion header contract,
+documented below), and **A23** — the management-endpoint authorization fix
+(password-only sessions get 403 `verification_required` from all six
+factor-management endpoints; record in
+[`docs/done/2026-08-20-URGENT-authz-fix-handoff.md`](docs/done/2026-08-20-URGENT-authz-fix-handoff.md)).
+
+**Post-rollout honesty:** the deploy passed 99 green tests, SpotBugs clean,
+and an approved review — and still needed eight rounds of live hotfixes
+before the plugin worked in a real browser. Every defect lived in a layer
+the test harness never touched (real CSP, real Content-Type, a real
+authenticator app, the real theme, a real restart). Full analysis and the
+extracted rules:
+[`docs/2026-08-22-postmortem-live-rollout.md`](docs/2026-08-22-postmortem-live-rollout.md).
+
+**Known gap:** there is no admin UI for managing *other users'* factors
+(TECH_DEBT A22-b) — the documented recovery path for a locked-out user
+requires an admin to clear factor state, and that surface is not built yet.
+
+What follows documents the built system as it landed through Task 8.
 
 Two Task 6 deviations from the plan sketch, both flagged in the commit and
 in the code (a third, the mount move `securityRealm/mfa` → `/mfa`, is
@@ -61,7 +74,9 @@ architecture & design-decision record used to audit the code.
 | [`docs/todo/TECH_DEBT.md`](docs/todo/TECH_DEBT.md) | Working technical-debt list from the 2026-08-18 top-to-bottom audit (A1–A23, with status/owner per item). Rulings from mads: 2026-08-18 (`current()` is authoritative — A1; both minting paths for `emailCodeSecret` — A2; `?redirect=` canonical over `Referer` — A3; Task 9 consumes-and-resets the telemetry fields — A7/A8) and 2026-08-19 (mount move `securityRealm/mfa` → `mfa` — A17; Bearer to be implemented home-grown, no dependency — A15, tracked as A21). Task 8 also added the booted-IT defects A16 (getServletPath 302 loop), A17 (realm mount collision), A18 (`<x:out>` render 500), A19 (IT `rawGet` followed redirects), A20 (endpoints had no dispatch token). **A23 (2026-08-20) landed and resolved** (management-endpoint authorization hole — see the urgent handoff below). |
 | [`docs/done/2026-08-20-URGENT-authz-fix-handoff.md`](docs/done/2026-08-20-URGENT-authz-fix-handoff.md) | **The A23 authorization fix** (found by the 2026-08-19 review): the gate's bare `/mfa` allow-list prefix let a password-only, not-yet-verified session reach all six factor-management endpoints — two POSTs could wipe both factors. LANDED 2026-08-20: pure `managementAllowed` seam + deny-before-mutation glue on all six endpoints (403 `verification_required`), honest red→green attack-chain IT, `setTotpSecret` de-bound from the profile form, TECH_DEBT A23 resolved — stamped and moved to `done/` when it landed. |
 | [`docs/done/2026-08-18-task8-handoff.md`](docs/done/2026-08-18-task8-handoff.md) | Landed Task 8's handoff note (end-to-end IT of the live gate): the two production defects it caught (A16 the getServletPath 302 self-loop, A17 the HPSR `securityRealm/mfa` mount collision — ruled 2026-08-19 to move to `/mfa`), the verified IT mechanics (context path, `c.login`, HPSR enrolment, form-by-id, JSON envelopes), the economics correction (~5 s per case, not minutes), and the A5/A15 corrections — moved to `done/` when Task 8 landed. |
-| [`docs/todo/2026-08-19-task10-handoff.md`](docs/todo/2026-08-19-task10-handoff.md) | **Written 2026-08-19 for a wiped-context handoff at the Task 9 landing (Task 10 deploys next):** the full Task 9 landing record (six endpoints + section inventory, the A2/A7/A8 landings, the **A22 admin-gate deviation**, the four IT cases, the trap catalogue — silent view path, no-crumb-on-the-security-page, gate-bounces-the-tab, descriptor-vs-instance, empty-property-on-render, SpotBugs `REC_CATCH_EXCEPTION`) and the Task 10 cutover runbook (stage on `hpi:run`, snapshot/checksum discipline, upload order, the one live-box check that covers 2.528→2.577 include drift). **Unblocked 2026-08-20** — the A23 fix above landed before deploy could proceed. Read this first for anything Task 9/10-related. |
+| [`docs/done/2026-08-19-task10-handoff.md`](docs/done/2026-08-19-task10-handoff.md) | **DONE — Task 10 deployed 2026-08-22** (stamped above the original kickoff text): the full Task 9 landing record (six endpoints + section inventory, the A2/A7/A8 landings, the **A22 admin-gate deviation**, the four IT cases, the trap catalogue) and the Task 10 cutover runbook as executed. Read this first for anything Task 9/10-related. |
+| [`docs/2026-08-22-postmortem-live-rollout.md`](docs/2026-08-22-postmortem-live-rollout.md) | **Post-rollout report:** the eight rounds of live fixes behind the green build — round-by-round forensics organized by concern layer, the cross-cutting analysis, and 15 extractable rules. Written by Moldy (the deployer) for Seb; the acceptance-discipline source of truth for this project. |
+| [`docs/2026-08-23-publishing-to-jenkins-update-center.md`](docs/2026-08-23-publishing-to-jenkins-update-center.md) | Publishing research: what it takes to ship this plugin via the official Jenkins update center — the three-phase process, the pre-hosting gap list (license, public repo, Jenkinsfile, admin UI gap), and the ongoing obligations (security process, baseline maintenance). Decision pending. |
 | [`docs/done/2026-08-19-task9-handoff.md`](docs/done/2026-08-19-task9-handoff.md) | Task 9 PREP handoff (superseded for current state by the Task 10 handoff above; its IT-mechanics forensics remain historically accurate) — moved to `done/` when Task 9 landed 2026-08-19. |
 
 
@@ -82,8 +97,9 @@ architecture & design-decision record used to audit the code.
 > untouched, disable/revoke, and every endpoint routing). The remaining
 > known edge is *who can open that screen on a given install* (the
 > security tab is core's admin-facing page — see "Enrolling your factors"
-> below), and the one thing not built is live cutover to the production
-> box (Task 10).
+> below). The live cutover to the production box landed 2026-08-22
+> (Task 10); the remaining functional gap is admin management of *other
+> users'* factors (TECH_DEBT A22-b, not built).
 
 ### Enrolling
 

@@ -1,6 +1,15 @@
-# ✅ UNBLOCKED — Task 10 kickoff (deploy to `jenkins.devcru.org`)
+# ✅ DONE — Task 10 deployed: `devcru-mfa` 1.0.0 LIVE on `jenkins.devcru.org` (2026-08-22)
 
-> **STATUS: UNBLOCKED (2026-08-20 — A23 landed green, this commit).**
+> **STAMPED DONE (2026-08-22) and moved to `docs/done/`.** The cutover
+> runbook below was executed: 1.0.0 deployed to `jenkins.devcru.org`,
+> kill switch verified, gate live for enrolled users. Post-deploy, the
+> plugin needed eight rounds of live hotfixes before it worked in a real
+> browser — full analysis and the 15 extracted rules in
+> [`../2026-08-22-postmortem-live-rollout.md`](../2026-08-22-postmortem-live-rollout.md).
+
+# (original) Task 10 kickoff (deploy to `jenkins.devcru.org`)
+
+> **STATUS AT WRITING: UNBLOCKED (2026-08-20 — A23 landed green, this commit).**
 > The external security review's critical finding (**A23** — the gate's
 > `/mfa` allow-list exposed all six management endpoints to password-only
 > sessions) is **fixed, red→green, and documented**: the fix landed
