@@ -2,6 +2,7 @@ package org.sebcru.mfa;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,8 +15,10 @@ import hudson.security.Permission;
 import hudson.security.SidACL;
 import hudson.security.AuthorizationStrategy;
 import hudson.util.Secret;
+import java.io.File;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -78,6 +81,17 @@ import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
  *       per Ruling 4, masked display address per A16, no raw mailbox in the DOM)
  *       and clears the locked-out victim's factors; a second clear is
  *       idempotent ({@code not_enrolled}) and the admin's OWN factors survive.</li>
+ *   <li><b>The restart-survival leg (spec §7 case 3 + §10 — the postmortem's
+ *       restart lesson applied to a credential-clearing op).</b> A verified
+ *       admin clears the locked-out victim, then the Jenkins instance is
+ *       RESTARTED ({@code rule.restart()} — reload from disk). The cleared
+ *       state must reload, not resurrect, the gate must now pass the victim
+ *       (password-only login), the victim must re-enrol through the documented
+ *       self-service path end to end, and the ADMIN's own factors must survive
+ *       with no collateral loss. The on-disk {@code config.xml} is probed as
+ *       the anti-vacuity anchor: the clear really persisted to disk, so the
+ *       post-restart assertions read disk truth, not a never-persisted
+ *       in-memory state.</li>
  * </ol>
  *
  * <p>Legs 1–3 run under {@code FullControlOnceLoggedInAuthorizationStrategy}
@@ -137,6 +151,23 @@ import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
  *       lands.</li>
  *   <li>Run 6 and the {@code mvn -o -B clean verify} mirror: 5/5 green,
  *       unit suites 112 green, SpotBugs 0, {@code .hpi} built.</li>
+ *   <li>Leg 6 (the restart-survival leg, spec §7 case 3 + §10) landed in a
+ *       LATER commit on the reviewed (APPROVED, v3) branch — the Moldy
+ *       review's one open item. It extended leg 5 (clear a locked-out
+ *       victim), added {@code rule.restart()}, and asserted the post-restart
+ *       state. First two runs were COMPILE failures of this leg's own
+ *       mechanics (a typo referencing the {@code java.util.regex} package
+ *       where the {@code Pattern.DOTALL} flag was meant; and
+ *       {@code JenkinsRule.restart()} declares {@code Throwable}, so the leg
+ *       widened to {@code throws Throwable}). The first RUNNING signal:
+ *       <b>6/6 green</b> — the restart leg exposed NO persistence defect,
+ *       which is an honest confirmation rather than a proven red (the
+ *       on-disk {@code config.xml} probe is the anti-vacuity anchor: it
+ *       proves the clear really wrote to disk, so the surviving clear is
+ *       read back from disk, not from a never-persisted in-memory state). A
+ *       red that surfaces later (e.g. a persistence change regressing the
+ *       round-trip) is exactly what this leg exists to catch — the
+ *       postmortem's restart lesson applied to a credential-clearing op.</li>
  * </ol>
  *
  * <p>Test-only fixtures ({@code verified-sub}, TOTP seed
@@ -548,6 +579,265 @@ class MfaAdminIT {
     JSONObject revoke = postAdmin(rule, c, "revokeTrust", victim.getId(), 200);
     assertEquals(VerifyOutcome.ERR_NOT_ENROLLED, revoke.optString("error"),
         "revokeTrust on a cleared (unenrolled) user must answer not_enrolled: " + revoke);
+  }
+
+  // ==================================================================
+  // Case 6 — the restart-survival leg (spec §7 case 3 + §10): the
+  //   credential-clear's persistence round-trip. The clear is proven at the
+  //   seam (leg 5 + AdminManageAllowedTest byte-for-byte) and target.save()
+  //   is called — this leg proves the persisted clear reloads from disk
+  //   after a REAL restart: no resurrection of the victim's factors, the
+  //   recovery path works end to end after the restart (gate passes,
+  //   re-enrolment closes the loop), and the admin's own factors suffer no
+  //   collateral loss.
+  // ==================================================================
+
+  /**
+   * WHAT — the persistence round-trip (spec §7 case 3 + §10, the
+   * postmortem's restart lesson applied to a credential-clearing op): after
+   * a verified admin clears the locked-out victim's factors and the Jenkins
+   * instance RESTARTS (reload from disk), the clear must reload as a clear —
+   * not resurrect — and the documented recovery must complete end to end.
+   *
+   * <pre>
+   * GIVEN  HPSR + FCOL; "victim" enrolled (TOTP + registered mail, trust 0)
+   *        — a total lockout shape; "admin" enrolled + mail, TOTP-verified
+   *        this session
+   * WHEN   the admin POSTs clearFactors?victim -> 200 ok=true (the same
+   *        verified op leg 5 proves)
+   * AND    the on-disk users/&lt;victim&gt;/config.xml exists and carries NO
+   *        totpSecret element — the anti-vacuity anchor: the clear really
+   *        reached disk, so the post-restart assertions read disk truth
+   * WHEN   rule.restart() — the Jenkins instance restarts and reloads from
+   *        disk
+   * THEN   (a) the victim's reloaded MfaUserProperty is STILL cleared:
+   *        totpSecret null, emailCodeSecret null, registeredEmail null,
+   *        trust 0 — the unenrolled state SURVIVED, it was NOT resurrected;
+   *        AND the victim's on-disk config.xml still carries no totpSecret
+   *        (the round-trip wrote the cleared state back, or wrote nothing
+   *        new — either way, no factor on disk)
+   * THEN   (b) a FRESH password-only session for the victim reaches the
+   *        dashboard 200 — the reloaded gate passes an unenrolled user (no
+   *        bounce); if the clear had not persisted, the victim's factors
+   *        would reload and the gate would bounce them to the MFA page
+   * THEN   (c) the victim RE-ENROLLS through the documented self-service
+   *        path (postEnroll — unenrolled users are exempt from the
+   *        management guard — then postEnrollConfirm with a live code):
+   *        the recovery described in the README completes, end to end,
+   *        after the restart
+   * THEN   (d) the ADMIN's own factors survived the restart byte-for-byte
+   *        (seed + mailbox, no collateral loss) and are LIVE — a fresh
+   *        verified admin session clears a second sacrificial victim
+   *        through the same verb, proving the admin's cleared-state
+   *        survives is not an accident of the admin never being touched
+   * </pre>
+   *
+   * WHY — the credential-clear's persistence is seam-proven (leg 5 +
+   * {@code AdminManageAllowedTest} byte-for-byte) and {@code target.save()}
+   * is called, but nothing upstream proved the persisted clear SURVIVES a
+   * restart. For an operation that DESTROYS credentials, an unproven
+   * round-trip is the postmortem's restart lesson in its purest form: a
+   * victim whose "recovered" factors silently resurrect after a restart is
+   * locked out again at the worst moment, and an admin who "cleared" a
+   * user believes the lockout is over when it is not. This leg is what
+   * spec §7 case 3 called "not negotiable for a credential-clearing op"
+   * and §10 item 2 requires as the definition of done. The on-disk
+   * {@code config.xml} probe is what makes (a)–(d) non-vacuous: without a
+   * disk anchor, an in-memory clear that was never persisted would pass (a)
+   * trivially — the anchor proves the clear wrote, so the reload is the
+   * round-trip being tested.
+   */
+  @Test
+  void clearedVictimSurvivesRestartAndRecoveryCompletes(JenkinsRule rule) throws Throwable {
+    ensureRealm(rule);
+    User victim = enroll(rule, "victim", VICTIM_PW, "JBSWY3DPEHPK3PXP");
+    victim.getProperty(MfaUserProperty.class).setRegisteredEmail("victim.example");
+    victim.save();
+    User admin = enroll(rule, "admin", ADMIN_PW, "KRSXG5CTMVRXEZLU");
+    admin.getProperty(MfaUserProperty.class).setRegisteredEmail("admin.example");
+    admin.save();
+
+    // The admin's natural flow (as leg 5): login → verify TOTP, then the
+    // credential-clear on the locked-out victim.
+    JenkinsRule.WebClient c = rule.createWebClient();
+    c.login("admin", ADMIN_PW);
+    verifyTotp(c, rule, "admin", "KRSXG5CTMVRXEZLU");
+
+    // (0) The clear succeeds (the verified op leg 5 proves in flight).
+    JSONObject clear = postAdmin(rule, c, "clearFactors", victim.getId(), 200);
+    assertTrue(clear.optBoolean("ok"), "the verified admin's clear must succeed: " + clear);
+
+    // (0a) ANTI-VACUITY ANCHOR — the clear persisted to DISK before the
+    // restart, so the post-restart assertions read round-trip truth rather
+    // than a never-persisted in-memory state. The victim's on-disk
+    // config.xml must be present (the clear path saved it) and must carry
+    // no totpSecret element (the factor is gone from disk).
+    File victimDir = userDir(rule.jenkins.getRootDir(), "victim");
+    File victimXml = new File(victimDir, "config.xml");
+    assertTrue(victimXml.exists(),
+        "the clear's save() must have materialised the victim's config.xml on disk: "
+            + victimXml);
+    assertFalse(diskXmlHasTotpSecret(victimXml),
+        "the cleared victim's on-disk config.xml must carry NO totpSecret element "
+            + "(the factor is gone from disk, not just from memory)");
+
+    // The RESTART — the round-trip leg proper: reload Jenkins from disk.
+    rule.restart();
+
+    // Resolve the reloaded users. User.getById re-resolves against the
+    // reloaded realm; the property is what the restart actually reloaded
+    // from config.xml.
+    User victimAfter = User.getById("victim", true);
+    User adminAfter = User.getById("admin", true);
+    assertNotNull(victimAfter, "the victim user must survive the restart");
+    assertNotNull(adminAfter, "the admin user must survive the restart");
+
+    // (a) The victim's reloaded state is STILL cleared — NOT resurrected.
+    MfaUserProperty victimP = victimAfter.getProperty(MfaUserProperty.class);
+    assertNotNull(victimP, "the victim's MfaUserProperty must be present (getOrCreate-safe)");
+    assertFalse(victimP.hasTotpFactor(),
+        "the victim's TOTP factor must NOT have resurrected across the restart");
+    assertFalse(victimP.hasEmailFactor(),
+        "the victim's email factor must NOT have resurrected across the restart");
+    assertNull(victimP.getRegisteredEmail(),
+        "the victim's registered mailbox must NOT have resurrected across the restart");
+    assertEquals(0L, victimP.getTrustedUntilMs(),
+        "the victim's trust must be 0 after the restart (the clear's trust reset survived)");
+    // The on-disk config.xml after the restart: the round-trip wrote the
+    // cleared state back (or wrote nothing new) — either way, NO factor
+    // element is on disk.
+    assertFalse(diskXmlHasTotpSecret(new File(victimDir, "config.xml")),
+        "after the restart the victim's on-disk config.xml must still carry NO totpSecret");
+
+    // (b) The reloaded gate passes the victim (unenrolled = exempt): a FRESH
+    // password-only session reaches the dashboard with no bounce. If the
+    // clear had not persisted, the victim's factors would reload and the
+    // gate would bounce them to the MFA page.
+    JenkinsRule.WebClient victimClient = rule.createWebClient();
+    victimClient.login("victim", VICTIM_PW);
+    HtmlPage victimHome = victimClient.getPage(rule.getURL());
+    int victimHomeStatus = victimHome.getWebResponse().getStatusCode();
+    assertEquals(200, victimHomeStatus,
+        "after the restart the UNENROLLED victim must reach the dashboard 200 "
+            + "without a gate bounce: " + victimHomeStatus);
+
+    // (c) The victim RE-ENROLLS through the documented self-service path,
+    // end to end, AFTER the restart (the README's recovery paragraph is
+    // completed: clear → restart → victim re-enrolls → round trip closes).
+    // An unenrolled user is EXEMPT from the management guard (the A23 guard
+    // only challenges ENROLLED-unverified sessions), so postEnroll is
+    // reachable password-only.
+    String crumb = mfaCrumb(victimClient, rule);
+    JSONObject gen = postMfaProfile(rule, victimClient, "postEnroll", crumb);
+    assertTrue(gen.optBoolean("ok"), "postEnroll must return a fresh seed: " + gen);
+    String newSeed = gen.optString("seed");
+    byte[] key = org.sebcru.mfa.crypto.Totp.decodeSecret(newSeed);
+    String code = org.sebcru.mfa.crypto.Totp.codeAt(key, System.currentTimeMillis());
+    JSONObject confirm = postMfaProfile(rule, victimClient, "postEnrollConfirm", crumb,
+        new NameValuePair("seed", newSeed), new NameValuePair("code", code));
+    assertTrue(confirm.optBoolean("ok"),
+        "postEnrollConfirm must commit the re-enrolment: " + confirm);
+    // The re-enrolled factor is LIVE and PERSISTED (the save in the confirm
+    // path wrote it) — the recovery path actually recovered.
+    MfaUserProperty victimRe = User.getById("victim", true).getProperty(MfaUserProperty.class);
+    assertTrue(victimRe.hasTotpFactor(),
+        "the victim must be re-enrolled after the restart (factor present in memory)");
+    assertEquals(newSeed, victimRe.getTotpSecret().getPlainText(),
+        "the re-enrolled factor must be the fresh seed the victim committed");
+
+    // (d) The ADMIN's own factors survived the restart with no collateral
+    // loss — the seed and mailbox reload identical, and the factors are
+    // LIVE (a fresh verified admin can clear a second sacrificial victim
+    // through the same verb, proving the admin's survival is real, not an
+    // accident of the admin never being touched in this test).
+    MfaUserProperty adminP = adminAfter.getProperty(MfaUserProperty.class);
+    assertTrue(adminP.hasTotpFactor(), "the admin's TOTP factor must survive the restart");
+    assertEquals("KRSXG5CTMVRXEZLU", adminP.getTotpSecret().getPlainText(),
+        "the admin's TOTP seed must reload byte-for-byte across the restart");
+    assertEquals("admin.example", adminP.getRegisteredEmail(),
+        "the admin's registered mailbox must survive the restart");
+
+    // A sacrificial second victim proves the admin's factors are LIVE after
+    // the restart (not merely present): the admin logs in fresh, verifies
+    // TOTP, and clears the sacrificial victim through the same verb.
+    User sacrificial = enroll(rule, "sacrificial", "sac-pw-1", "QWERTYUIOP12345678");
+    sacrificial.getProperty(MfaUserProperty.class).setRegisteredEmail("sac.example");
+    sacrificial.save();
+    JenkinsRule.WebClient adminFresh = rule.createWebClient();
+    adminFresh.login("admin", ADMIN_PW);
+    verifyTotp(adminFresh, rule, "admin", "KRSXG5CTMVRXEZLU");
+    JSONObject sacClear = postAdmin(rule, adminFresh, "clearFactors", sacrificial.getId(), 200);
+    assertTrue(sacClear.optBoolean("ok"),
+        "the post-restart verified admin must be able to clear via the same verb: "
+            + sacClear);
+    assertFalse(User.getById("sacrificial", true)
+            .getProperty(MfaUserProperty.class).hasTotpFactor(),
+        "the sacrificial victim's factor must be cleared by the post-restart admin");
+  }
+
+  /**
+   * Resolve the on-disk user directory for the given id. Jenkins sanitises
+   * the id for the directory name (hyphens dropped, a hash appended), so
+   * match the sanitised prefix rather than the raw id.
+   */
+  private static File userDir(File jenkinsRoot, String userId) {
+    String sanitized = userId.replaceAll("[^A-Za-z0-9_]", "");
+    File usersRoot = new File(jenkinsRoot, "users");
+    File[] dirs = usersRoot.listFiles((d, n) -> n.startsWith(sanitized + "_"));
+    assertNotNull(dirs, "the users directory must exist");
+    assertEquals(1, dirs.length,
+        "exactly one user directory for " + userId + ": " + Arrays.toString(dirs));
+    return dirs[0];
+  }
+
+  /**
+   * True iff the user's on-disk {@code config.xml} carries a non-empty
+   * {@code totpSecret} element. The anti-vacuity probe: before the restart
+   * it proves the clear WROTE to disk (so the post-restart assertions read
+   * round-trip truth); after the restart it proves the persisted state did
+   * NOT resurrect a factor.
+   */
+  private static boolean diskXmlHasTotpSecret(File xml) throws java.io.IOException {
+    if (!xml.exists()) {
+      return false; // no file, no factor element
+    }
+    String content = java.nio.file.Files.readString(xml.toPath());
+    // A present, non-empty totpSecret carries the base32 seed between the
+    // tags: <hudson.util.Secret>…base32…</hudson.util.Secret>. A cleared
+    // factor writes no element at all (or an empty one). Match the element
+    // name and require non-whitespace content between its tags.
+    java.util.regex.Matcher m = java.util.regex.Pattern
+        .compile("<totpSecret>\\s*([^<\\s].*?)</totpSecret>", java.util.regex.Pattern.DOTALL)
+        .matcher(content);
+    return m.find() && !m.group(1).trim().isEmpty();
+  }
+
+  /**
+   * POST a crumb-bearing self-service {@code /mfa} profile endpoint
+   * (postEnroll / postEnrollConfirm / …) and assert its 200 JSON envelope.
+   * The MfaAdminIT shape of the MfaProfileIT helper — context-relative
+   * under the rule's URL, A19's redirect discipline is irrelevant here
+   * (profile endpoints answer 200 JSON, never a 302).
+   */
+  private JSONObject postMfaProfile(JenkinsRule rule, JenkinsRule.WebClient c, String endpoint,
+      String crumb, NameValuePair... fields) throws Exception {
+    WebRequest req = new WebRequest(new URL(rule.getURL(), "mfa/" + endpoint), HttpMethod.POST);
+    List<NameValuePair> params = new ArrayList<>();
+    params.add(new NameValuePair(this.crumbName, crumb));
+    for (NameValuePair f : fields) {
+      params.add(f);
+    }
+    req.setRequestParameters(params);
+    WebResponse resp;
+    try {
+      resp = c.loadWebResponse(req);
+    } catch (FailingHttpStatusCodeException e) {
+      resp = e.getResponse();
+    }
+    assertEquals(200, resp.getStatusCode(),
+        "a /mfa profile endpoint must answer its 200 JSON envelope: " + resp.getStatusCode()
+            + " body=" + resp.getContentAsString());
+    return JSONObject.fromObject(resp.getContentAsString());
   }
 
   // ==================================================================

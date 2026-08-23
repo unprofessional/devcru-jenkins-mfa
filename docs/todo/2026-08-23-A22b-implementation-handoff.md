@@ -18,11 +18,12 @@ JDK for javap: `export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"`.
 
 ---
 
-## 0. Status — IMPLEMENTED, COMMITTED `d2a9008`, PUSHED, REVIEWED: APPROVED
+## 0. Status — IMPLEMENTED, COMMITTED, PUSHED, REVIEWED: APPROVED; **§1 TASK NOW COMPLETE (this commit)**
 
-- Branch `a22b-spec` @ `d2a9008` (pushed to `origin/a22b-spec`). **No PR**
-  (per ruling). The two v2 defects are RESOLVED — full story in the `d2a9008`
-  commit message and in §5 below.
+- Branch `a22b-spec` @ `d2a9008` (pushed to `origin/a22b-spec`); the §1
+  restart leg lands as a NEW commit on top (this handoff's stamp commit).
+  **No PR** (per ruling). The two v2 defects are RESOLVED — full story in
+  the `d2a9008` commit message and in §5 below.
 - **All gates green at commit:** `MfaAdminIT` 5/5 (booted Jenkins, FCOL +
   hand-rolled least-privilege SidACL), `AdminManageAllowedTest` 6/6,
   `FilterLogicTest` 15/15, `MfaFilterIT` 9/9, `TotpTest` 5/5. SpotBugs clean,
@@ -36,6 +37,28 @@ JDK for javap: `export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"`.
   acceptance item is tracked under "Not in the code yet."
 
 ## 1. YOUR NEXT TASK — the restart-survival leg (spec §7 case 3, §10)
+
+> **COMPLETE (this commit).** `MfaAdminIT` leg 6
+> `clearedVictimSurvivesRestartAndRecoveryCompletes` — exactly the shape
+> sketched below: leg 5's clear flow → on-disk `config.xml` anti-vacuity
+> anchor (the clear really reached disk) → `rule.restart()` → (a) victim
+> reloaded STILL cleared (no TOTP/email/mailbox/trust resurrection, and
+> the on-disk `totpSecret` element still absent), (b) fresh password-only
+> victim session reaches the dashboard 200 (the reloaded gate passes an
+> unenrolled user), (c) victim re-enrolls end to end (`postEnroll` →
+> `postEnrollConfirm` with a live code — the README's documented recovery
+> path), (d) admin's own factors survive byte-for-byte AND are live (a
+> post-restart verified admin clears a sacrificial second victim through
+> the same verb). **Persistence finding: none — the round-trip held on
+> the first running signal (6/6, no red).** First two runs were compile
+> failures of the leg's own mechanics (regex-package typo; `restart()`
+> declares `Throwable` → `throws Throwable`), recorded in the IT's
+> javadoc. `mvn -o -B clean verify` green: 113 tests (112 baseline +
+> leg 6), 0 fail, SpotBugs clean, hpi built. BDD-documented; README
+> recovery paragraph and TECH_DEBT (resolved table + closure marker)
+> updated in the same commit per AGENTS.md. Out-of-scope items (both-
+> themes render, real-browser walk) NOT bundled — open with mads whether
+> they gate this task or wait.
 
 This is the one thing the review found standing between "merged" and
 "live-ready." The spec set a higher done-bar than the branch cleared.
