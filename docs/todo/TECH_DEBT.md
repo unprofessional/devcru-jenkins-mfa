@@ -606,10 +606,26 @@ the full deviation record.
 
 ## Not in the code yet (planned work, not debt)
 
-Task 10's live-box cutover (the plan's backup/rollback section). (Task 9's
-enrolment/management UI + A2's second minting path + A7/A8's telemetry
-consumer + reset wiring LANDED 2026-08-19 — see the Task 9 handoff in
-`docs/todo/` for what shipped and the A22 deviation note.)
+- **A22-b — admin management of *other users'* factors (the admin user
+  management UI).** The named functional gap before any public release:
+  an admin clearing a locked-out user's factor state currently has no UI
+  path to do it. Needs a ruling before implementation — it changes whose
+  profile the buttons touch, a security surface, not a convenience.
+- **Public-release readiness:** license + LICENSE file, `Jenkinsfile`
+  (`buildPlugin()`), public repo, pom metadata — full gap list, process,
+  and ongoing obligations in
+  [`../2026-08-23-publishing-to-jenkins-update-center.md`](../2026-08-23-publishing-to-jenkins-update-center.md).
+
+Everything else planned has shipped: Task 9 (enrolment/management UI + A2's
+second minting path + A7/A8 telemetry consumers + reset wiring, 2026-08-19),
+A21 Bearer (2026-08-19), A23 management-endpoint authorization
+(2026-08-20), Task 10 live cutover (deployed 2026-08-22), and the eight
+post-rollout hardening rounds (2026-08-22). The post-rollout rounds are
+recorded in
+[`../2026-08-22-postmortem-live-rollout.md`](../2026-08-22-postmortem-live-rollout.md)
+rather than as A-items here: they were live-fix rounds against layers this
+audit's scope (pre-Task-7 code review) never touched, and the postmortem is
+their audit trail.
 
 ---
 
@@ -627,6 +643,12 @@ consumer + reset wiring LANDED 2026-08-19 — see the Task 9 handoff in
 | A2 — `emailCodeSecret` never minted; blank-string key | Second minting path (`postEmailTestCode`) now routes through the same `ensureEmailCodeSecret(p)` seam; `postDisableEmail` retires the key on mailbox clear. | Task 9 commit | One mint implementation for both paths; key never outlives its mailbox. |
 | A7 — `failedAttemptStreak` write-only and unbounded | `postVerify` success path resets the streak to 0 on the same `u.save()` as `RateLimiter.clear`; wire-pinned (wrong verify → 1, success → 0). The "UI reads it" hint half did NOT land (documented scope note under A7). | Task 9 commit | The streak is no longer monotonic; a hint remains a 2-line jelly add if ever wanted. |
 | A8 — `lastVerifiedFactor` had no writer | `postVerify` writes the factor that actually PROVED (0=TOTP, 1=email) on success — not the submitted shape; wire-pinned (fabricated 1 overwritten to 0 by a TOTP success). | Task 9 commit | Telemetry field is now truthful; email-proven branch (1) rides the same ternary, exercised by the filter IT's email path. |
+| A16 — `targetPath()` evaluated every request as `/` (infinite 302 self-loop) | In-site path rebuilt as `getRequestURI()` − `getContextPath()` (query folded, null/odd → `/` fail-closed); `MfaFilter` javadoc carries the "why not `getServletPath()`" so nobody simplifies it back. | `c34e2b1` (Task 8) | Found by the first IT to drive the real gate over HTTP; the unit suite can structurally never catch this class (it pins the path the filter computes, not the computation). |
+| A17 — MFA mount `securityRealm/mfa` squatted by the live realm (404 for every enrolled user) | Full 6-point sweep to the free single segment `/mfa` (controller `getUrlName()`, allow-list, `isSecurityPath`, gate 302, IT helpers, jelly doc); unit pins moved with the path. | `c34e2b1` (Task 8) | mads-ruled 2026-08-19. Invisible until the IT matched the production realm shape (`HudsonPrivateSecurityRealm` is a `ModelObject` that squats the prefix). |
+| A18 — MFA page 500 on render: `<x:out>` is not a tag on this runtime | The page's two dynamic text values moved to `j:out` (`jelly:core`, core's own escape tag); crumb attribute interpolated raw exactly as core's crumb-bearing views do. | `c34e2b1` (Task 8) | Invisible until the page was served over HTTP for the first time; `InjectedTest`'s Jelly parse checks structure, not serve-time execution. |
+| A19 — IT `rawGet` followed redirects despite its contract | `setRedirectEnabled(false)` toggled around `loadWebResponse` on the same client; "no raw by default" lesson pinned in the helper's javadoc. | `c34e2b1` (Task 8) | Test-harness defect, not a filter defect — cost two rounds of misattribution before the gate's 302 was exonerated. |
+| A20 — `postVerify`/`postResendEmail` had no dispatch token (dead buttons for every user) | Both endpoints annotated `@WebMethod(name = "postVerify" | "postResendEmail")` — the exact tokens the page's JS already posts; `@RequirePOST` stays as the method-level guard. | `c34e2b1` (Task 8) | Stapler auto-maps only get/is/do-prefixed methods; `@RequirePOST` is policy, not routing. |
+| A21 — Bearer `Authorization: <api-token>` authenticator (home-grown, no dependency) | `BearerTokenFilter` registered ahead of the gate: strip `Bearer `, resolve identity from the documented `X-Jenkins-User` companion header, `ApiTokenProperty.matchesPassword` via the public API, set request auth + the api-token attribute the gate already exempts; wrong/missing/unknown → pass through untouched (no oracle). | `19e8498` | The A15 ruling as a buildable unit: no new dependency, zero gate changes, Basic path untouched. Unit-pinned (8 parse cases) + booted IT (positive + no-oracle negative). |
 | A23 — gate allow-list exposed all six management endpoints to password-only sessions | Pure seam `MfaController.managementAllowed(enrolled, sessionVerified, trustLive)` + 403 `verification_required` glue at the top of all six endpoints (deny-before-mutation); the mandatory `setTotpSecret` `@DataBoundSetter` removal (seed committed only via `postEnrollConfirm`); false `postDisableTotp`/`postEnrollConfirm` javadoc rewritten (see the A23 entry's "Landed" note). | this commit (urgent fix, 2026-08-20) | Red→green: the attack-chain IT ran red on all six endpoints first. Unenrolled and trusted-device sessions keep management access; a password-only attacker gets 403s and leaves the victim's factor state byte-identical. Task 10 (deploy) unblocked. |
 
 *Move items here with their fixing commit when closed. Keep the resolved
