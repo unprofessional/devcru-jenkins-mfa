@@ -51,5 +51,14 @@
              description="${%exemptUsers.hint}">
       <f:textarea rows="4"/>
     </f:entry>
+    <!-- A22-b discoverability (spec §6.4): the admin recovery surface is
+         findable only by URL, so the one link lives here — the settings
+         page is the admin's MFA front door (no second navigation tree).
+         Static anchor (escape-by-default='true' escapes only text/
+         attribute values; the href is fixed plugin-relative). -->
+    <f:entry title="${%manageFactorsLink}"
+             description="${%manageFactorsLink.hint}">
+      <a href="../mfaAdmin/">${%manageFactorsLink.action}</a>
+    </f:entry>
   </f:section>
 </j:jelly>
