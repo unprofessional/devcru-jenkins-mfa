@@ -17,7 +17,7 @@
 > `MfaProfileSeamTest`. The attack-chain IT asserts the victim's factor state
 > is byte-identical after the denied POSTs. Full gate: `mvn -B -ntp clean
 > verify` green, SpotBugs 0. **Task 10 is unblocked** — pick up
-> `docs/todo/2026-08-19-task10-handoff.md` for the deploy (its
+> `docs/done/2026-08-19-task10-handoff.md` for the deploy (its
 > BLOCKED banner was lifted in the same commit).
 >
 > ---
@@ -192,7 +192,7 @@ mads rules on them separately:
 5. False javadoc fixed; TECH_DEBT A23 resolved; this handoff stamped and
    moved to `docs/done/`.
 6. **Then** — and only then — pick up
-   `docs/todo/2026-08-19-task10-handoff.md` for the deploy.
+   `docs/done/2026-08-19-task10-handoff.md` for the deploy.
 
 ---
 
