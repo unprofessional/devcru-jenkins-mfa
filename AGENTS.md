@@ -75,3 +75,11 @@ present in that file (TotpTest is the house standard).
 - Security decisions live in the plan ([`docs/plans/2026-08-17-jenkins-mfa-plugin.md`](docs/plans/2026-08-17-jenkins-mfa-plugin.md),
   "Security model decisions") — implement them as written; re-litigating them
   in a diff is out of scope.
+- **Acceptance discipline:** the post-rollout report
+  ([`docs/2026-08-22-postmortem-live-rollout.md`](docs/2026-08-22-postmortem-live-rollout.md))
+  is this repo's definition of done for user-facing work: a green build is a
+  precondition, not an acceptance. Before declaring any user-facing change
+  done, walk the full user journey in a real browser (login → enrol → verify
+  → unrelated profile save → restart → re-login) and probe the layers the
+  harness cannot see: host security policy, response headers, the
+  least-privileged path, both themes, the strict external consumer.
