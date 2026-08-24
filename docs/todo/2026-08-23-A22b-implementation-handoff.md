@@ -22,8 +22,9 @@ JDK for javap: `export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"`.
 
 **Status:** A22-b (admin roster + `clearFactors`/`revokeTrust`, the restart-
 survival leg, the context-safe script-URL fix) is green, reviewed, APPROVED.
-mads is merging `a22b-spec` → `develop`. All next work branches from `develop`
-AFTER the merge (new branch, not `a22b-spec`).
+MERGED 2026-08-23 as PR #18 (`a22b-spec` → `develop`, merge commit `63e5b81`).
+All next work branches from `develop` AFTER the merge (new branch, not
+`a22b-spec`).
 
 **Correction 1 — model attribution (read this).** The real-browser acceptance
 walk in this PR did NOT all run on you (qwen3.8:27b). Hermes logs show the
@@ -47,7 +48,19 @@ light theme yet. That is task §1-B below. Do not repeat the overclaim.
 
 Do these in order. Each is its own commit; no PR without mads.
 
-### §1-A — Cleanup from this PR (do this first)
+### §1-A — Cleanup from this PR (do this first) — ~~open~~ DONE 2026-08-23 (branch `a22b-1a-cleanup`)
+
+Executed 2026-08-23: deleted all listed ephemeral state (cookie jars,
+`sandbox-credentials`, `sac-reenrol-seed`, `fixture-seed-result.txt`,
+HTML/JSON captures, `script-url-*`/`final-*` logs, `classpath.txt`,
+`__pycache__`/`pycache`, temp `TmpWalkIT.java` + `WalkAuthorizationStrategy.java`
+copy, scratch seeders and walk scripts). **Decision: `.scratch/screenshots/`
+KEPT** — they are the acceptance record for this PR; they remain ignored via
+`.gitignore` (`.scratch/`). Verified afterwards: `git status --short` clean,
+no listeners on `:8081`/`:9333`, no cookie/seed/credential material in the
+repo tree or in `/tmp` (name-pattern sweep). The reusable CDP journeys +
+fixture under `scripts/acceptance/a22b/` are untouched and still the only
+tracked fixture material.
 
 The reusable CDP journeys + fixture already live (committed) under
 `scripts/acceptance/a22b/`. Everything else from the walk is ephemeral runtime
