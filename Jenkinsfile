@@ -19,7 +19,11 @@
 //
 // Requires on the yharnam agent (it runs as user `jenkins`, NOT hunter —
 // /home/hunter is 750 and unreachable from CI):
-//   - JDK 21:      /usr/lib/jvm/java-21-openjdk-amd64 (system, present)
+//   - JDK 21:      /opt/jdk-21.0.12+8 (Temurin, WITH ct.sym + javac).
+//                  NOT the system /usr/lib/jvm/java-21-openjdk-amd64 —
+//                  that is openjdk-21-jre-headless: no javac, no ct.sym,
+//                  its embedded compiler rejects --release for EVERY value
+//                  ("release version 17 not supported", build #4).
 //   - Maven 3.9+:  /opt/apache-maven-3.9.11 (world-readable copy of hunter's)
 //   - offline repo seeded at /home/jenkins/.m2/repository
 //   - ssh keypair for user jenkins, pubkey trusted by ranger@shinraedge2
@@ -42,6 +46,9 @@ pipeline {
         EDGE       = 'ranger@192.168.7.35'
         // Fresh CI user = empty known_hosts; never let ssh hang on a prompt.
         SSHOPTS    = '-o StrictHostKeyChecking=accept-new -o BatchMode=yes'
+        // Temurin JDK with ct.sym — the hpi plugin compiles with
+        // maven.compiler.release=17, which a JRE cannot honor.
+        JAVA_HOME  = '/opt/jdk-21.0.12+8'
         JHOME      = '/var/lib/jenkins'
         SNAPDIR    = '/home/jenkins/backups/jenkins-snapshots'
         // Workspace-local, NOT shared /tmp: /tmp/jenkins-cli.jar can exist
@@ -56,9 +63,9 @@ pipeline {
                 // Absolute paths: the agent user is `jenkins`, so $HOME is
                 // /home/jenkins — never $HOME-relative toolchain paths here.
                 sh '''
-                    export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:/opt/apache-maven-3.9.11/bin:$PATH"
+                    export PATH="/opt/jdk-21.0.12+8/bin:/opt/apache-maven-3.9.11/bin:$PATH"
                     java -version 2>&1 | head -1
-                    mvn -version 2>&1 | head -1
+                    mvn -version 2>&1 | head -2
                     # Fresh CLI jar matching the live controller, every run.
                     curl -fsS -o "$CLIJAR" "$CONTROLLER/jnlpJars/jenkins-cli.jar"
                 '''
@@ -69,7 +76,7 @@ pipeline {
             steps {
                 // The ONLY full validation — mirrors CI incl. SpotBugs.
                 sh '''
-                    export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:/opt/apache-maven-3.9.11/bin:$PATH"
+                    export PATH="/opt/jdk-21.0.12+8/bin:/opt/apache-maven-3.9.11/bin:$PATH"
                     mvn -o -B clean verify
                 '''
             }
@@ -102,7 +109,7 @@ pipeline {
                 // controller. Never snapshot-with-Jenkins-stopped is NOT the
                 // rule we break willingly; it is the only rung we have.
                 sh '''
-                    export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH"
+                    export PATH="/opt/jdk-21.0.12+8/bin:$PATH"
                     mkdir -p "$SNAPDIR"
                     TS=$(date +%Y%m%d-%H%M%S)
                     OUT="$SNAPDIR/jenkins-snapshot-$TS.tar.gz"
@@ -127,7 +134,7 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'jenkins-rally-api-token', variable: 'JK_TOKEN')]) {
                     sh '''
-                        export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH"
+                        export PATH="/opt/jdk-21.0.12+8/bin:$PATH"
                         CLI="java -jar $CLIJAR -s $CONTROLLER -auth rally:$JK_TOKEN -http"
                         # RestartRequiredException (exit 1) is EXPECTED when
                         # re-installing a loaded plugin — the file still gets
