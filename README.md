@@ -141,6 +141,14 @@ architecture & design-decision record used to audit the code.
 > section's title appeared as a raw code word) and one description cut
 > off mid-sentence. The labels are fixed and a test now fails the build if
 > any setting on that page ever loses its human-readable text again.
+>
+> The standalone admin page for managing other users' MFA factors
+> (reached from that settings page's "Factor recovery" link) now offers a
+> back link, so you are never stranded on it: from the roster the link
+> returns to the Security configuration page; from the permission-denied
+> view it returns to the Manage Jenkins console (the settings page is not
+> reachable to a non-admin, so that is where their route off the page
+> goes).
 
 ### Enrolling
 

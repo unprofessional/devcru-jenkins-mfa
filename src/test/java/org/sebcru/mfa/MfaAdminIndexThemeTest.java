@@ -50,20 +50,42 @@ import org.junit.jupiter.api.Test;
  */
 class MfaAdminIndexThemeTest {
 
-  /** The rendered admin document, read exactly as the classpath ships it. */
+  /**
+   * The rendered admin document, read exactly as the classpath ships it.
+   * Loaded LAZILY: MfaAdminBackLinkTest reuses this class's css-slicing
+   * helpers and may run BEFORE this class's own @BeforeAll, so any helper
+   * that needs the document goes through {@link #adminDoc()} (load-once,
+   * synchronized) instead of reading the field directly.
+   */
   private static String doc;
 
   @BeforeAll
-  static void loadAdminIndex() throws Exception {
-    InputStream in =
-        MfaAdminIndexThemeTest.class.getResourceAsStream(
-            "/org/sebcru/mfa/MfaAdminController/index.jelly");
-    assertNotNull(in,
-        "the admin index view resource must be on the test classpath — "
-            + "a move that orphans it would make these pins vacuous");
-    try (in) {
-      doc = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+  static void loadAdminIndex() {
+    adminDoc();
+  }
+
+  /**
+   * Load-once accessor for the rendered admin document: self-initialising
+   * so sibling test classes can call the css-slicing helpers in any order.
+   *
+   * @return the full text of MfaAdminController/index.jelly
+   */
+  static synchronized String adminDoc() {
+    if (doc == null) {
+      InputStream in =
+          MfaAdminIndexThemeTest.class.getResourceAsStream(
+              "/org/sebcru/mfa/MfaAdminController/index.jelly");
+      assertNotNull(
+          in,
+          "the admin index view resource must be on the test classpath — "
+              + "a move that orphans it would make these pins vacuous");
+      try (in) {
+        doc = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+      } catch (java.io.IOException e) {
+        throw new AssertionError("unreadable admin index view: " + e, e);
+      }
     }
+    return doc;
   }
 
   /**
@@ -208,17 +230,22 @@ class MfaAdminIndexThemeTest {
    * {@code <style>}.
    */
   private static String cardCss() {
-    int arm = doc.indexOf("<j:otherwise>");
-    int start = doc.indexOf("<style>", arm);
-    int end = doc.indexOf("</style>", start);
+    String d = adminDoc();
+    int arm = d.indexOf("<j:otherwise>");
+    int start = d.indexOf("<style>", arm);
+    int end = d.indexOf("</style>", start);
     if (arm < 0 || start < 0 || end < 0 || end < start) {
       throw new AssertionError("the card document has no <style> block");
     }
-    return doc.substring(start, end);
+    return d.substring(start, end);
   }
 
-  /** The text inside {@code css}'s light media block, or null if absent. */
-  private static String extractLightBlock(String css) {
+  /**
+   * The text inside {@code css}'s light media block, or null if absent.
+   * PUBLIC: MfaAdminBackLinkTest reuses the same css-slicing so both
+   * classes read the document one way.
+   */
+  static String extractLightBlock(String css) {
     int start = css.indexOf("@media (prefers-color-scheme: light)");
     if (start < 0) {
       return null;
@@ -344,8 +371,121 @@ class MfaAdminIndexThemeTest {
   }
 
   /**
+   * Alias used by MfaAdminBackLinkTest — the light media block of
+   * {@code css}, or null if there is none.
+   *
+   * @param css a stylesheet text
+   * @return the light block's inner text, or null
+   */
+  public static String lightBlockOf(String css) {
+    return extractLightBlock(css);
+  }
+
+  /**
+   * The stylesheet {@code css} with its light media block REMOVED — i.e.
+   * the base (dark) rules only. Used by MfaAdminBackLinkTest to assert the
+   * base-scheme side of a per-scheme colour pin without re-implementing
+   * the slice.
+   *
+   * @param css a stylesheet text
+   * @return the base rules (the light block excised), or css unchanged
+   *         when it has no light block
+   */
+  public static String baseBlockOf(String css) {
+    int start = css.indexOf("@media (prefers-color-scheme: light)");
+    if (start < 0) {
+      return css;
+    }
+    int open = css.indexOf('{', start);
+    if (open < 0) {
+      return css;
+    }
+    int close = matchingClose(css, open);
+    if (close < 0) {
+      return css;
+    }
+    return css.substring(0, start) + css.substring(close + 1);
+  }
+
+  /**
+   * True when the element {@code sel} has its own rule inside {@code css}
+   * that declares a colour ({@code color: #...}). A mention in a comment,
+   * a {@code :hover} suffix, or a selector-group neighbour does not count.
+   *
+   * @param css a stylesheet text (base or light block)
+   * @param sel the selector, e.g. {@code .back}
+   * @return true iff sel's own rule declares a colour
+   */
+  public static boolean selectorColoured(String css, String sel) {
+    return colourOf(css, sel) != null;
+  }
+
+  /**
+   * The {@code color: #...} value declared by {@code sel}'s OWN rule
+   * inside {@code css}, or null when the selector has no rule or the rule
+   * declares no colour. Distinct from {@link #bodyBackgroundOf(String)},
+   * which is body-specialised; this is the generic per-selector form the
+   * D2 back-link pin needs.
+   *
+   * @param css a stylesheet text (base or light block)
+   * @param sel the selector, e.g. {@code .back}
+   * @return the hex colour, or null
+   */
+  public static String colourOf(String css, String sel) {
+    int i = 0;
+    while ((i = css.indexOf(sel, i)) >= 0) {
+      if (!isSelectorStart(css, i)) {
+        i += sel.length();
+        continue;
+      }
+      int brace = css.indexOf('{', i);
+      if (brace < 0) {
+        return null;
+      }
+      String between = css.substring(i + sel.length(), brace).trim();
+      if (between.isEmpty() || between.endsWith(",")) {
+        int close = matchingClose(css, brace);
+        String colour = firstHexAfter(css, brace, close, "color");
+        if (colour != null) {
+          return colour;
+        }
+        return null;
+      }
+      // A non-bare tail (".back:hover", ".back .x") is a different rule.
+      i += sel.length();
+    }
+    return null;
+  }
+
+  // ----------------------------------------------------------------------
+  // package-private accessors used by MfaAdminBackLinkTest's javadoc-free
+  // sibling assertions — the slicing is shared so the two test classes
+  // cannot drift apart on how they cut the document
+  // ----------------------------------------------------------------------
+
+  /**
+   * The base (dark) rules of the roster arm's card stylesheet —
+   * MfaAdminBackLinkTest's per-scheme pin needs both sides.
+   *
+   * @return the roster card css with the light block excised
+   */
+  public static String rosterBaseCss() {
+    return baseBlockOf(cardCss());
+  }
+
+  /**
+   * The roster arm's light media block text, or null.
+   *
+   * @return the light block inner text
+   */
+  public static String rosterLightCss() {
+    return lightBlockOf(cardCss());
+  }
+  /**
    * The first {@code <property>: #hex...} declaration inside
-   * {@code [open, close]}, or null.
+   * {@code [open, close)}, or null. (Restored: the D2 helper block was
+   * appended at the wrong anchor and severed this method; the method is
+   * load-bearing for the original body-background pin as well.)
    */
   private static String firstHexAfter(String css, int open, int close,
       String property) {
