@@ -1,194 +1,170 @@
-# A22-b admin factor-management — implementation handoff (v3, 2026-08-23, POST-REVIEW)
+# A22-b admin factor-management — handoff (v4, 2026-08-23, PRE-MERGE / NEXT TASKS)
 
-Written for Sebastian (next session). **The implementation is DONE, committed,
-pushed, and externally reviewed: APPROVED.** This handoff now exists to hand
-you ONE remaining task (§1). Read §0 (status) and §1 (what to do next) first.
-§2–§4 are reference you may need; §5 is the resolved-defect audit trail —
-**do not re-do any of §5.**
+Written for Sebastian (next session). **A22-b is APPROVED and is being merged
+to `develop` by mads.** This handoff now hands you the POST-MERGE next steps
+(§1), including cleanup from this PR. Read §0 (status + one correction you must
+know) and §1 (what to do next) first. §2–§5 are reference; §6 is standing
+instructions. **Do not re-do the resolved-defect record (§5).**
 
 **Repo:** `/home/hunter/dev/devcru-jenkins-mfa`
 **Binding spec:** `docs/todo/2026-08-23-A22b-admin-factor-management-spec.md`
 **House rules:** `AGENTS.md` (BDD doc on every test, README practical-usage
 updated in the same commit, local validation = `mvn clean verify` mirrors CI
 incl. SpotBugs, no PR without mads, commit via `git commit -F <file>` then
-read back, push `a22b-spec`).
+read back).
 
 Maven: `export PATH="$HOME/.local/bin:$PATH"`, always `-o` (offline).
 JDK for javap: `export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"`.
 
 ---
 
-## 0. Status — IMPLEMENTED, RESTART-PROVEN, REAL-BROWSER ACCEPTED
+## 0. Status + one correction you must internalize
 
-- Branch `a22b-spec`; restart-survival work is committed/pushed through
-  `05ebb43`. The current acceptance/fix commit sits on top and is pending its
-  final `clean verify` + commit/push gate. **No PR** (per ruling).
-- Booted-Jenkins coverage is six `MfaAdminIT` legs, including the
-  restart-survival round trip. The real-browser walk then booted the branch
-  through `hpi:run` under the real `/jenkins` context and drove a second
-  headful Chromium on Xvfb — not HtmlUnit and not the collector browser.
-- **Browser finding and fix:** the roster rendered, but both action buttons
-  were dead because `getAdminScriptUrl()` emitted relative
-  `plugin/devcru-mfa/mfa-admin.js`; Chromium resolved it beneath
-  `/jenkins/mfaAdmin/`. `MfaAdminIT` was made red on the rendered script URL,
-  then `getAdminScriptUrl()` was fixed to root the resource at Stapler's
-  current context (`/jenkins/plugin/...` live). The same leg is green 6/6.
-- **Full journey passed in real Chromium:** admin password login → live TOTP
-  verification → enrolled-only roster (`admin`, `sac`) with no raw mailbox in
-  the DOM → dark and light media renders → typed-id confirmation disabled on
-  mismatch/enabled on exact `sac` → clear succeeds and removes `sac` from the
-  roster → `sac` reaches the dashboard password-only → generates a fresh QR
-  and seed on Security → confirms a live TOTP → passes the immediate MFA gate
-  → appears enrolled again.
-- **Restart/browser persistence passed:** after restarting the actual
-  `hpi:run` JVM, remembered trust survived; each user revoked it through the
-  Security UI, then admin's original TOTP and `sac`'s newly-enrolled TOTP both
-  verified. The admin roster reloaded as `admin,sac`; least-privilege
-  `reader` reloaded and received 403 `admin_permission_required` on
-  `/mfaAdmin/`.
-- Executable, non-secret CDP journeys and the sandbox fixture live under
-  `scripts/acceptance/a22b/`. Generated credentials, browser profile, logs,
-  candidate seeds and screenshots remain ignored under `.scratch/`; none
-  enter Git.
+**Status:** A22-b (admin roster + `clearFactors`/`revokeTrust`, the restart-
+survival leg, the context-safe script-URL fix) is green, reviewed, APPROVED.
+mads is merging `a22b-spec` → `develop`. All next work branches from `develop`
+AFTER the merge (new branch, not `a22b-spec`).
 
-## 1. Restart-survival leg (spec §7 case 3, §10) — COMPLETE
+**Correction 1 — model attribution (read this).** The real-browser acceptance
+walk in this PR did NOT all run on you (qwen3.8:27b). Hermes logs show the
+restart-survival leg ran on qwen, but mid-task mads ran `/model gptsol` in
+another channel (for an unrelated Gmail cron), and Hermes' bare `/model`
+PERSISTS GLOBALLY by default, so the browser navigation, screenshots, the
+script-URL defect find/fix, and the final commit actually ran on
+`gpt-5.6-sol`. config.default has now been reset to `qwen3.8:27b-mtp-q8_0`.
+**Lesson: before AND after any real-browser (or any) work, confirm the active
+model is the intended one** — check the Hermes status card / log, and state it
+in your report. Don't let a silent model swap misattribute your work again.
 
-`MfaAdminIT.clearedVictimSurvivesRestartAndRecoveryCompletes` proves leg 5's
-clear flow → on-disk `config.xml` anti-vacuity anchor → `rule.restart()` →
-(a) victim reloaded still cleared, (b) a fresh password-only victim session
-reaches the dashboard, (c) victim re-enrols end to end, and (d) the admin's
-own factors survive byte-for-byte and remain live. No persistence defect was
-found. The real-browser walk above independently exercised the same consumer
-journey against the actual `hpi:run` process and a second real Chromium.
+**Correction 2 — the theme claim was overstated.** v3 §0/§10 said "dark and
+light renders" were captured. The dark and light screenshots are
+**byte-identical (same md5)** because `index.jelly` is a hardcoded dark-theme
+page with NO light styling — emulating `prefers-color-scheme: light` renders
+the identical dark page. So "both themes verified" was not true; there is no
+light theme yet. That is task §1-B below. Do not repeat the overclaim.
 
-### §10 breadth-of-consideration ledger
+## 1. NEXT TASKS (post-merge, branch from `develop`)
 
-1. **Host:** `hpi:run` served Jenkins 2.528.3 at the non-root `/jenkins`
-   context. Probe found the relative static-script URL defect; context-rooted
-   URL fixed and pinned in `MfaAdminIT`.
-2. **Runtime envelope:** second headful snap Chromium ran on isolated CDP 9333
-   under Xvfb `:99`; the collector browser/CDP 9222 was not touched. Jenkins
-   CSP loaded the corrected same-origin static script.
-3. **External consumer:** real Chromium completed login, TOTP, roster,
-   typed-confirmation mutation, password-only recovery, QR/manual-seed
-   re-enrolment, and post-restart verification. HtmlUnit alone was not treated
-   as acceptance.
-4. **Environments:** standalone admin page captured under emulated dark and
-   light `prefers-color-scheme`; controls remained present and legible.
-5. **Privilege:** sandbox-only one-admin `SidACL` granted ADMINISTER only to
-   `admin`, READ to authenticated users. `reader` reached the dashboard but
-   `/mfaAdmin/` answered 403 `admin_permission_required`, including after
-   restart.
-6. **Time/order:** confirmation began disabled, remained non-operative until
-   exact target id `sac`, then single-flight clear completed. Newly enrolling
-   `sac` was immediately gated and had to verify the new factor before return.
-7. **Restart:** actual `hpi:run` JVM restarted. Admin factor, newly-enrolled
-   victim factor, remembered trust, roster, and least-privilege denial all
-   survived; trust was revoked through each user's UI before proving both
-   TOTP factors live again.
+Do these in order. Each is its own commit; no PR without mads.
 
-**Acceptance result:** §10's both-theme and real-browser items are complete.
-The final repository gate remains `mvn -o -B clean verify`, then commit/readback
-and push to `a22b-spec`; no PR.
+### §1-A — Cleanup from this PR (do this first)
 
-## 2. IT shape + helpers (reference for the restart leg)
+The reusable CDP journeys + fixture already live (committed) under
+`scripts/acceptance/a22b/`. Everything else from the walk is ephemeral runtime
+state under ignored `.scratch/` and should be cleaned now that acceptance is
+done — especially anything credential-shaped:
 
-File: `src/test/java/org/sebcru/mfa/MfaAdminIT.java`. **5 legs, all green at
-commit** (the v2 red legs are fixed):
+- Delete `.scratch/` runtime state: `sandbox-credentials`, `sac-reenrol-seed`,
+  `fixture-seed-result.txt`, all `*.cookies`, the `whoami*.json` /
+  `fixture-crumb.json`, the `script-url-*.log` / `final-*.log` captures, the
+  `__pycache__` + `pycache/` trees, `classpath.txt`, the HTML captures, and the
+  temp `TmpWalkIT.java` + `src/.../WalkAuthorizationStrategy.java` copies (the
+  durable strategy lives in `scripts/acceptance/a22b/fixture-src/`).
+- Keep or drop the `.scratch/screenshots/` evidence deliberately (they are the
+  acceptance record; if kept, leave them ignored; if dropped, note it).
+- Then confirm: `git status --short` clean, no listeners left on `:8081`/`:9333`,
+  no credential/seed/cookie material sitting on disk. Never leave throwaway
+  credentials on disk after the run that needed them.
 
-1. `enrolledPasswordOnlySessionIsBouncedByTheGateOffTheAdminSurface` — carve-out
-   302 leg.
+### §1-B — Fix the admin page theming (the real light/dark gap)
+
+The admin page is dark-only. Make the theming correct so light and dark are
+genuinely distinct:
+
+- Decide the target with the house style (Jenkins' own pages follow the user's
+  theme). Either make `MfaAdminController/index.jelly` theme-aware (respect
+  `prefers-color-scheme` / Jenkins' theme tokens) or, if dark-only is the
+  ruling, document that explicitly — but do NOT leave it silently dark-only
+  while claiming both themes.
+- Re-render under BOTH emulated schemes and capture two screenshots that are
+  actually different (different md5). That is the acceptance for this task.
+- This is real-browser work: run it ON qwen and confirm the model in your
+  report (Correction 1).
+
+### §1-C — A24: the third verb — force-enrol + first-time MFA setup UI
+
+The next feature (Ruling 4's "for now" companion; tracked in TECH_DEBT "Not in
+the code yet"): when an admin enforces MFA fleet-wide, the enrolled-only roster
+goes empty, but the admin still needs to see WHO to enrol and enrol them, and a
+user hitting their first login needs a first-time MFA setup flow.
+
+- Re-read the A24 entry in TECH_DEBT + the spec's Ruling-4 note before
+  designing. Draft the spec delta / plan and get mads's rulings BEFORE
+  implementing (spec-first, exactly like A22-b).
+- Reuse the roster row-list and the `/mfaAdmin` surface; the follow-up was
+  deliberately shaped so a third verb + force-enrol columns don't force a
+  rework (pure row-list model, `userId`+operation wire shape).
+- The real-browser acceptance for this MUST run on qwen and say so (Correction
+  1). This is the task mads explicitly wants you to prove the browser on.
+
+## 2. IT shape + helpers (reference)
+
+File: `src/test/java/org/sebcru/mfa/MfaAdminIT.java`. **6 legs, all green:**
+
+1. `enrolledPasswordOnlySessionIsBouncedByTheGateOffTheAdminSurface` — carve-out 302.
 2. `unenrolledAdminCanReadRosterButNotMutate` — Ruling-3 edge.
-3. self-strike pin — verified admin clears own id → 200
-   `admin_self_management_forbidden`, victim factors intact.
-4. `nonAdminIsDeniedTheAdminSurfaceAtTheWire` — least-privilege strategy;
-   includes the **(d) verified-non-admin order probe** (the Defect-2
-   discriminator: a proven-credential non-admin is denied on the PERMISSION
-   axis, not credential). **Your new restart leg is leg 6.**
-5. `verifiedAdminClearsLockedOutVictimAndOwnFactorsSurvive` — the admin journey
-   (your base to extend).
+3. `verifiedAdminCannotClearTheirOwnFactorsSelfStrikePin` — self-strike.
+4. `nonAdminIsDeniedTheAdminSurfaceAtTheWire` — least-privilege + the (d)
+   verified-non-admin order probe (Defect-2 discriminator).
+5. `verifiedAdminClearsLockedOutVictimAndOwnFactorsSurvive` — admin journey.
+6. `clearedVictimSurvivesRestartAndRecoveryCompletes` — restart round-trip.
 
-Helpers (verified by read; reuse, don't rewrite): `rawGet`, `rawPostAdmin`
-(redirect disabled + restored — the A19 idiom), `postAdmin` (expects-200),
-`pageHtml`, `enroll`, `verifyTotp`, `ensureRealm`. The nested
-`LeastPrivilegeAdministerStrategy` (extends the abstract
-`AuthorizationStrategy`, returns a fail-closed `SidACL` from `getRootACL()`) is
-only needed for leg 4 — your restart leg can use the default FCOL world.
+Helpers (reuse, don't rewrite): `rawGet`, `rawPostAdmin` (redirect
+disabled/restored), `postAdmin`, `pageHtml`, `enroll`, `verifyTotp`,
+`ensureRealm`. The nested `LeastPrivilegeAdministerStrategy` is only for leg 4.
 
 ## 3. Verified API facts (do not re-discover — javap/jar-verified)
 
-- Stapler on the build: 2030.v88a_855365981. The verbs use
-  `StaplerRequest2/Response2`. `doIndex` was REMOVED (Defect-1 fix): the
-  class-dir view `MfaAdminController/index.jelly` auto-renders on the empty
-  token (the `MfaController` sibling proves the shape); the page READ gate is
-  `adminPageAllowed()` in the jelly (`<j:when test="${!it.adminPageAllowed()}">`
-  → `<st:statusCode value="403"/>`).
-- **The two roster cells that 404'd** used `j:out` as an attribute on `<td>`
-  (invalid XML → `JellyFacet#buildIndexDispatchers` dropped the view). They are
-  now standalone `<j:out value="..."/>` elements (lines ~231-232). Do not
-  reintroduce attribute-form `j:out`.
-- Core jar: `jenkins-core-2.528.3`. `AuthorizationStrategy` = abstract class.
-  `MatrixAuthorizationStrategy` ABSENT offline (why the SidACL hand-roll exists).
-  `SidACL` fails closed on null. `hudson.util.AccessDenied` ABSENT.
-- **The Defect-2 seam (the approved production form):**
-  `Jenkins.get().getACL().hasPermission2(auth, Jenkins.ADMINISTER)`,
-  fail-closed on null / `AnonymousAuthenticationToken` / ANONYMOUS_USERNAME.
-  NOT `User.hasPermission(...)` (self-granting no-op — see §5).
-- `MfaUserProperty` setters taking `hudson.util.Secret` (not String):
-  `setTotpSecret`, `setEmailCodeSecret`, `setPendingCodeHash`; getters return
-  `Secret`. `clearFactorState(p)` is the single writer of the fully-unenrolled
-  state.
-- `UserProperty` persistence: `target.save()` writes the user's config.xml;
-  `rule.restart()` reloads from disk — that round-trip is exactly what your
-  restart leg asserts.
+- Stapler 2030.v88a_855365981; verbs use `StaplerRequest2/Response2`. `doIndex`
+  REMOVED — class-dir `MfaAdminController/index.jelly` auto-renders on the empty
+  token; page READ gate is `adminPageAllowed()` in the jelly.
+- Roster cells are standalone `<j:out value="..."/>`, never attribute-form.
+- Core `jenkins-core-2.528.3`; `MatrixAuthorizationStrategy` ABSENT offline;
+  `SidACL` fails closed; `hudson.util.AccessDenied` ABSENT.
+- **Production permission seam (mads-approved):**
+  `Jenkins.get().getACL().hasPermission2(auth, Jenkins.ADMINISTER)`, fail-closed
+  on null/Anonymous. NOT `User.hasPermission(...)` (self-granting no-op).
+- **`getAdminScriptUrl()` MUST stay context-rooted** (Stapler
+  `getContextPath()` + `/plugin/devcru-mfa/mfa-admin.js`) — a relative value
+  dies under a non-root context.
+- `MfaUserProperty` Secret-setters: `setTotpSecret`/`setEmailCodeSecret`/
+  `setPendingCodeHash`. `clearFactorState(p)` = single writer of unenrolled state.
+- Persistence: `target.save()` → config.xml; `rule.restart()` reloads from disk.
 
-## 4. Run history (evidence trail, condensed)
+## 4. Run history (condensed)
 
-Run logs under `/tmp/a22b-*.log` (run1 jelly-500 + redirect-following + login-
-403 fixture; run2 compile-fail on missing `throws`; run3 the two-defect red;
-run4 the `j:out` SAXParseException discovery; run5 a self-inflicted HtmlUnit
-cast bug in leg 5(c); run6 final green). **Stale-data warning:** surefire
-reports under `target/` are per-run — always pair a surefire read with the
-matching run log's `Tests run:` line.
+Run logs under `/tmp/a22b-*.log`. **Stale-data warning:** surefire reports under
+`target/` are per-run — always pair a surefire read with the matching run log's
+`Tests run:` line.
 
-## 5. Resolved-defect record (v2 §0 — audit trail, DO NOT RE-DO)
+## 5. Resolved-defect record (audit trail, DO NOT RE-DO)
 
-- **Defect 1 (admin page never rendered / 404).** Root cause was two stacked
-  bugs: the `doIndex` forward had no rule to land on, and the view itself had
-  never been load-tested (two roster cells used `j:out` as an attribute →
-  invalid XML → view dropped at facet build → silent 404). Fix: remove
-  `doIndex`, rewrite the cells as standalone `<j:out/>`, put the 403 read gate
-  in the jelly. The v1/v2 "jelly verified" verdict was a static read, not a
-  render — recorded in the IT's red→green history.
-- **Defect 2 (the permission seam was a no-op).** Bytecode-proven on core
-  2.528.3: `User.getACL()` wraps the strategy ACL in a delegate that
-  self-grants TRUE when the principal matches the user's own id, BEFORE
-  consulting the strategy — so `actor.hasPermission(ADMINISTER)` was true for
-  every authenticated actor. Fix: check the current session against the Jenkins
-  ROOT ACL (`getAuthorizationStrategy().getRootACL()` verbatim, no self-grant
-  wrapper). **This seam change is mads-approved (2026-08-23); do not alter it
-  further without sign-off.**
-- **Filter carve-out (spec §6 contradiction, resolved as the signed ruling).**
-  `MfaFilter` allow-list now matches `/mfa` segment-precisely (bare / `?query`
-  / `/mfa/<endpoint>`) so `/mfaAdmin/*` is NOT swept through the gate
-  allow-list (the A23 sibling-sweep class, 2nd instance). Pinned both
-  directions in `FilterLogicTest`.
+- **Defect 1 (admin page never rendered / 404):** `doIndex` forward had no rule;
+  two roster cells used `j:out` as an attribute (invalid XML → view dropped →
+  silent 404). Fixed: removed `doIndex`, standalone `<j:out/>`, 403 gate in jelly.
+- **Defect 2 (permission seam was a no-op):** `User.getACL()` self-grants TRUE
+  for the actor's own id. Fixed: current session vs Jenkins ROOT ACL
+  (`getRootACL()`, no self-grant). mads-approved; do not alter without sign-off.
+- **Filter carve-out:** `MfaFilter` allow-list matches `/mfa` segment-precisely
+  so `/mfaAdmin/*` is NOT swept through the gate allow-list. Pinned both ways.
+- **Context-safe script URL (real-browser defect):** relative `mfa-admin.js`
+  resolved under `/jenkins/mfaAdmin/`, leaving both action buttons dead; fixed
+  by rooting at the Stapler context, pinned red→green on the rendered URL.
 
-## 6. Standing instructions (from mads) + process note
+## 6. Standing instructions (from mads) + process notes
 
-- Branch `a22b-spec`; implementation committed `d2a9008`; your restart leg will
-  be a NEW commit on top.
-- mads-approved-per-step on merges; **no PR** without explicit ask.
-- Spec is the binding document. Where spec and ruling conflict, the SIGNED
-  ruling wins, documented as a contradiction note — not silently resolved.
+- All next work branches from `develop` AFTER the merge; mads-approved-per-step
+  on merges; **no PR** without explicit ask.
+- Spec is binding; where spec and ruling conflict, the SIGNED ruling wins,
+  documented as a contradiction note — not silently resolved.
 - Credentials never in commits/logs/doc; test-only local-realm passwords are
-  throwaway fixtures, not real secrets.
-- **Process note from the review (the one miss worth not repeating):** the
-  Defect-2 seam change was made on disk BEFORE mads signed off; mads had to
-  pull the thread. The guardrail's substance survived (it stayed
-  uncommitted/reversible and got sign-off), but the sequence didn't. Going
-  forward: when implementation surfaces a decision that needs mads — a seam
-  change, a spec contradiction, a defect that moves the security model — STOP
-  and report-and-ask. Don't fold it into the flow. That keeps a clean gate
-  instead of a mid-flow trip.
-- This handoff (v3) supersedes v1 and v2 where they conflict.
+  throwaway fixtures, not real secrets. Clean them off disk after use (§1-A).
+- **Process note 1 (report-and-ask):** when implementation surfaces a decision
+  that needs mads — a seam change, a spec contradiction, a security-model-
+  shifting defect — STOP and report-and-ask. Don't fold it into the flow.
+- **Process note 2 (model attribution):** Hermes' bare `/model` persists
+  GLOBALLY and once silently swapped you to Sol mid-task. Before and after any
+  real-browser (or otherwise model-sensitive) work, confirm the active model is
+  qwen3.8:27b and state it in your report. Use `/model <name> --session` if a
+  session-only change is ever needed.
+- This handoff (v4) supersedes v1–v3 where they conflict.
