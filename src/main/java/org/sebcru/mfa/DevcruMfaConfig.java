@@ -2,6 +2,7 @@ package org.sebcru.mfa;
 
 import hudson.Extension;
 import hudson.Util;
+import hudson.util.ListBoxModel;
 import jenkins.model.GlobalConfiguration;
 import jenkins.model.GlobalConfigurationCategory;
 import net.sf.json.JSONObject;
@@ -291,6 +292,43 @@ public final class DevcruMfaConfig extends GlobalConfiguration {
 
   public void setExemptUsers(String exemptUsers) {
     this.exemptUsers = Util.fixNull(exemptUsers);
+  }
+
+  // -------------------------------------------------------------------
+  // Drop-down fillers for the config.jelly form.
+  // -------------------------------------------------------------------
+
+  /**
+   * Filler for the {@code <f:select/>} on the {@code policy} field.
+   * §1-D D3, 2026-08-24: the live controller log proved this method's
+   * absence as a recurring exception on EVERY render of
+   * {@code /manage/configureSecurity/} —
+   * {@code java.lang.IllegalStateException: class
+   * org.sebcru.mfa.DevcruMfaConfig doesn't have the doFillPolicyItems
+   * method for filling a drop-down list} — because core's
+   * {@code Descriptor.calcFillSettings} resolves the filler by name
+   * ({@code "doFill" + <field> + "Items"}, per 2.528.3 bytecode: an
+   * {@code IllegalStateException} on the null miss from
+   * {@code ReflectionUtils.getPublicMethodNamed}) and threw. The value
+   * bound back through {@code bindJSON} is the enum NAME, so the options
+   * are exactly {@link Policy#values()} — the two gate policies — each
+   * with its display label from the plan's table. A filler offering a
+   * third value would 404 into bindJSON's enum coercion on save; a
+   * different return type would render a broken box silently. Both are
+   * pinned in {@code DevcruMfaConfigDropFillTest} (red-first: the
+   * existence leg failed with the production exception's exact shape
+   * before this method existed).
+   */
+  public ListBoxModel doFillPolicyItems() {
+    ListBoxModel model = new ListBoxModel();
+    for (Policy p : Policy.values()) {
+      String label =
+          p == Policy.REQUIRED
+              ? "REQUIRED"
+              : "OFF";
+      model.add(label, p.name());
+    }
+    return model;
   }
 
   // -------------------------------------------------------------------
