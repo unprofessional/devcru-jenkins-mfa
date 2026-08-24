@@ -133,6 +133,14 @@ architecture & design-decision record used to audit the code.
 > (valid archive, real entry count, sha sidecar) *before* anything is
 > touched — a corrupt or truncated snapshot fails the build instead of
 > becoming the rollback rung you reach for later.
+>
+> The admin settings page (Manage Jenkins → Security → Devcru MFA) now
+> shows a readable label and description for every setting, in every
+> language-neutral install: on 2026-08-24 a production walk found several
+> settings rendered their internal key names (e.g. the "Factor recovery"
+> section's title appeared as a raw code word) and one description cut
+> off mid-sentence. The labels are fixed and a test now fails the build if
+> any setting on that page ever loses its human-readable text again.
 
 ### Enrolling
 
