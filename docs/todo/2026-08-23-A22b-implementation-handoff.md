@@ -4,10 +4,16 @@
 > `MfaAdminIndexThemeTest` pin + browser proof). Both merged to `develop` as
 > PR #20 (`26c1e7d`) and **DEPLOYED to production `jenkins.devcru.org`
 > 2026-08-24 ~01:10 ET** (smoke green; deploy record in Moldy's memory, not
-> here). **TOP PRIORITY: §1-PIPELINE — get the self-deploy pipeline green
-> (mads's call 2026-08-24 ~03:00 ET; Moldy diagnosed + pre-fixed, you verify
-> and iterate). THEN §1-D — the production feedback round from mads's live
-> walk. §1-C (A24) stays last** — separate spec-first PR awaiting mads's rulings.
+> here). **§1-PIPELINE DONE 2026-08-24 (build #6, ~18:26 UTC): build #5
+> died on a dash-incompatible `set -o pipefail` in Snapshot (the agent's sh
+> is dash); fixed + regressed-pinned in `88a0185` (dash-native stages,
+> explicit snapshot integrity gate, `JenkinsfilePipelineTest` which caught a
+> second latent dash bug in Smoke on first run). Build #6 fired by the real
+> merge took the FULL deploy path — snapshot with integrity gate (59,767
+> entries), install, controller restart, **durability resume**, SMOKE GREEN —
+> the untested leg is now proven. Repro clone deleted.** **NEXT: §1-D — the
+> production feedback round from mads's live walk. §1-C (A24) stays last** —
+> separate spec-first PR awaiting mads's rulings.
 
 Written for Sebastian (next session). **A22-b is APPROVED and is being merged
 to `develop` by mads.** This handoff now hands you the POST-MERGE next steps
