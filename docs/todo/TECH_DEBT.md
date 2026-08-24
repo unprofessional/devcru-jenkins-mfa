@@ -644,12 +644,18 @@ the full deviation record.
 
 ## Not in the code yet (planned work, not debt)
 
-- ~~A22-b completion — restart-survival leg~~ — **CLOSED this commit:**
-  `MfaAdminIT` leg 6 (`clearedVictimSurvivesRestartAndRecoveryCompletes`)
-  proves clear → `rule.restart()` → victim reloaded-still-cleared (no
-  resurrection), fresh password-only login passes the gate, re-enrolment
-  completes end to end, admin factors survive AND stay live. The full
-  account is in the Resolved table (A22-b row) and the IT's javadoc.
+- ~~A22-b completion — restart-survival + real-browser acceptance~~ —
+  **CLOSED this commit:** `MfaAdminIT` leg 6
+  (`clearedVictimSurvivesRestartAndRecoveryCompletes`) proves clear →
+  `rule.restart()` → victim reloaded-still-cleared (no resurrection), fresh
+  password-only login passes the gate, re-enrolment completes end to end,
+  admin factors survive AND stay live. The independent `hpi:run` + headful
+  Chromium walk covered both colour schemes, one-admin/READ-only privilege,
+  typed confirmation, clear → password-only recovery → fresh TOTP enrolment,
+  actual JVM restart, both factors live again, and reader 403. It found one
+  real defect: the relative `mfa-admin.js` URL resolved beneath `/mfaAdmin/`,
+  leaving both buttons dead. The URL is now rooted at Stapler's context and
+  the rendered wire shape is pinned red→green in `MfaAdminIT`.
 
 - **A24 — force-enrol view (Ruling 4's "for now" companion).** When an admin
   enforces MFA fleet-wide (policy `REQUIRED` + every user enrolled) the
@@ -697,7 +703,7 @@ their audit trail.
 | A20 — `postVerify`/`postResendEmail` had no dispatch token (dead buttons for every user) | Both endpoints annotated `@WebMethod(name = "postVerify" | "postResendEmail")` — the exact tokens the page's JS already posts; `@RequirePOST` stays as the method-level guard. | `c34e2b1` (Task 8) | Stapler auto-maps only get/is/do-prefixed methods; `@RequirePOST` is policy, not routing. |
 | A21 — Bearer `Authorization: <api-token>` authenticator (home-grown, no dependency) | `BearerTokenFilter` registered ahead of the gate: strip `Bearer `, resolve identity from the documented `X-Jenkins-User` companion header, `ApiTokenProperty.matchesPassword` via the public API, set request auth + the api-token attribute the gate already exempts; wrong/missing/unknown → pass through untouched (no oracle). | `19e8498` | The A15 ruling as a buildable unit: no new dependency, zero gate changes, Basic path untouched. Unit-pinned (8 parse cases) + booted IT (positive + no-oracle negative). |
 | A23 — gate allow-list exposed all six management endpoints to password-only sessions | Pure seam `MfaController.managementAllowed(enrolled, sessionVerified, trustLive)` + 403 `verification_required` glue at the top of all six endpoints (deny-before-mutation); the mandatory `setTotpSecret` `@DataBoundSetter` removal (seed committed only via `postEnrollConfirm`); false `postDisableTotp`/`postEnrollConfirm` javadoc rewritten (see the A23 entry's "Landed" note). | this commit (urgent fix, 2026-08-20) | Red→green: the attack-chain IT ran red on all six endpoints first. Unenrolled and trusted-device sessions keep management access; a password-only attacker gets 403s and leaves the victim's factor state byte-identical. Task 10 (deploy) unblocked. |
-| A22-b — no admin UI to manage *other users'* factors (lockout recovery dead end) | Option (A) per spec ruling 1: new `MfaAdminController` (mount `mfaAdmin`, NOT gate allow-listed) with enrolled-only roster + `clearFactors`/`revokeTrust`; two-axis guard (permission → credential) on a pure seam, self-management refused, typed-id confirm server-side, audit log on both mutations; gate carve-out (segment-precise bare-`/mfa` allow-list + `mfaadmin` in `isSecurityPath`); spec-internal "zero filter changes" contradiction flagged in the A22 entry. Plus the restart-survival leg (spec §7 case 3 + §10, 2026-08-23): `MfaAdminIT` leg 6 — clear → on-disk anchor → `rule.restart()` → victim reloaded-still-cleared + gate-passes + re-enrolls end to end + admin factors survive and stay live. | this commit (A22-b, 2026-08-23) | Spec-governed: see `docs/todo/2026-08-23-A22b-admin-factor-management-spec.md` + the A22 entry's "Landed" note. Follow-up tracked as A24 (force-enrol view, Ruling 4's "for now"). |
+| A22-b — no admin UI to manage *other users'* factors (lockout recovery dead end) | Option (A) per spec ruling 1: new `MfaAdminController` (mount `mfaAdmin`, NOT gate allow-listed) with enrolled-only roster + `clearFactors`/`revokeTrust`; two-axis guard (permission → credential) on a pure seam, self-management refused, typed-id confirm server-side, audit log on both mutations; gate carve-out (segment-precise bare-`/mfa` allow-list + `mfaadmin` in `isSecurityPath`); spec-internal "zero filter changes" contradiction flagged in the A22 entry. Plus the restart-survival leg (spec §7 case 3 + §10, 2026-08-23): `MfaAdminIT` leg 6 — clear → on-disk anchor → `rule.restart()` → victim reloaded-still-cleared + gate-passes + re-enrolls end to end + admin factors survive and stay live. Real-browser closure: context-rooted `mfa-admin.js` URL (red→green rendered-wire pin), both colour schemes, typed clear, victim password-only recovery + fresh TOTP, actual `hpi:run` restart, admin/victim factors re-proven, reader 403. | this commit (A22-b, 2026-08-23) | Spec-governed: see `docs/todo/2026-08-23-A22b-admin-factor-management-spec.md` + the A22 entry's "Landed" note. Follow-up tracked as A24 (force-enrol view, Ruling 4's "for now"). |
 
 *Move items here with their fixing commit when closed. Keep the resolved
 text intact — this file is the audit trail.*

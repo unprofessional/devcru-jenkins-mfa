@@ -168,6 +168,16 @@ import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
  *       red that surfaces later (e.g. a persistence change regressing the
  *       round-trip) is exactly what this leg exists to catch — the
  *       postmortem's restart lesson applied to a credential-clearing op.</li>
+ *   <li>Real-browser §10 acceptance (headful Chromium against the branch's
+ *       {@code hpi:run} server at context {@code /jenkins}) found the roster
+ *       rendered but both action buttons were dead: the page emitted relative
+ *       {@code plugin/devcru-mfa/mfa-admin.js}, which Chromium resolved as
+ *       {@code /jenkins/mfaAdmin/plugin/devcru-mfa/mfa-admin.js}. The admin
+ *       journey leg was made RED first on the rendered script {@code src};
+ *       {@code getAdminScriptUrl()} now roots the resource at the current
+ *       Stapler context, the leg returned 6/6 green, and the same browser then
+ *       completed typed clear, recovery, re-enrolment, both colour schemes,
+ *       least-privilege denial, and actual-JVM restart verification.</li>
  * </ol>
  *
  * <p>Test-only fixtures ({@code verified-sub}, TOTP seed
@@ -497,7 +507,10 @@ class MfaAdminIT {
    * GIVEN  HPSR + FCOL; "victim" enrolled + mail (locked out); "admin"
    *        enrolled + mail, TOTP-verified this session
    * WHEN   the admin GETs the roster          -> 200; victim AND admin listed
-   *        (Ruling 4 enrolled-only); raw mailboxes absent from the DOM (A16)
+   *        (Ruling 4 enrolled-only); the static action script URL is
+   *        context-rooted ({@code /plugin/devcru-mfa/mfa-admin.js}), never
+   *        resolved beneath {@code /mfaAdmin/}; raw mailboxes absent from
+   *        the DOM (A16)
    * WHEN   POST clearFactors?victim           -> 200 ok=true; victim fully
    *        unenrolled (enabled flag, TOTP factor, registered mail all null/
    *        false)
@@ -538,6 +551,10 @@ class MfaAdminIT {
     String page = pageHtml(c, rule);
     assertTrue(page.contains("victim"), "roster must include the enrolled victim: " + page);
     assertTrue(page.contains("admin"), "roster must include the enrolled admin: " + page);
+    String expectedScriptUrl = rule.getURL().getPath() + "plugin/devcru-mfa/mfa-admin.js";
+    assertTrue(page.contains("src=\"" + expectedScriptUrl + "\""),
+        "the static action script must be rooted at the Jenkins context, not resolved beneath "
+            + "/mfaAdmin/: " + page);
     // …but the raw plaintext mailbox must never reach the DOM (A16/privacy):
     assertFalse(page.contains("victim.example"),
         "the raw registered mailbox must not appear in the admin page DOM");

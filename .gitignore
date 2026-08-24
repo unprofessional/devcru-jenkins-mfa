@@ -2,6 +2,9 @@
 target/
 work/
 
+# Local acceptance-walk scratch (throwaway seeders, CDP scripts, screenshots)
+.scratch/
+
 # IDE
 .idea/
 *.iml

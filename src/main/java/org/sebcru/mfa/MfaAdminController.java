@@ -464,12 +464,18 @@ public final class MfaAdminController implements RootAction {
   }
 
   /**
-   * The page's static-verb script URL — {@code <root>/plugin/devcru-mfa/
-   * mfa-admin.js} (the plugin's webapp resources, the mfa-section.js
-   * pattern; Jenkins' CSP script-src 'self' forbids the inline script).
+   * The page's static-verb script URL — {@code <context>/plugin/devcru-mfa/
+   * mfa-admin.js}. Rooting it at the current Stapler context is load-bearing:
+   * a relative {@code plugin/...} value on {@code /mfaAdmin/} resolves in a
+   * real browser as {@code /mfaAdmin/plugin/...}, leaving every action button
+   * inert. JenkinsRule has an empty context (therefore {@code /plugin/...});
+   * {@code hpi:run} uses {@code /jenkins} (therefore
+   * {@code /jenkins/plugin/...}).
    */
   public String getAdminScriptUrl() {
-    return "plugin/devcru-mfa/mfa-admin.js";
+    StaplerRequest2 request = Stapler.getCurrentRequest2();
+    String context = request == null ? "" : request.getContextPath();
+    return context + "/plugin/devcru-mfa/mfa-admin.js";
   }
 
   /**
