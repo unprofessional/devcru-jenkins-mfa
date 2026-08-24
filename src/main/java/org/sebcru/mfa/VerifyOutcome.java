@@ -42,6 +42,35 @@ public final class VerifyOutcome {
    * carries; the UI maps it to "complete verification first."
    */
   public static final String ERR_VERIFICATION_REQUIRED = "verification_required";
+  /**
+   * A22-b: the admin factor-management surface denies a session whose actor
+   * has not proven a second factor — the admin surface's A23-analogue
+   * (the actor may even be ADMINISTER, but a password-only admin must not
+   * clear another user's factors). Carried by the 403 the controller
+   * answers; the UI maps it to "verify first, then reload."
+   */
+  public static final String ERR_ADMIN_VERIFICATION_REQUIRED = "admin_verification_required";
+  /**
+   * A22-b: an admin posting against their OWN user id through the admin
+   * surface — the load-bearing self-management prohibition (a password-only
+   * admin stripping their own factors through the admin endpoint is A23's
+   * hole one endpoint to the left). Self-service has its own endpoints.
+   */
+  public static final String ERR_ADMIN_SELF_MANAGEMENT = "admin_self_management_forbidden";
+  /**
+   * A22-b: the typed-user-id confirmation failed — the {@code confirmUserId}
+   * field did not match the named target (the server-side half of the
+   * page's type-to-confirm dialog; ruling 5).
+   */
+  public static final String ERR_ADMIN_CONFIRM = "admin_confirm_required";
+  /**
+   * The actor is not an ADMINISTER holder — the PERMISSION axis of A22-b
+   * (spec §4). Deliberately distinct from {@link #ERR_ADMIN_VERIFICATION_
+   * REQUIRED} (the CREDENTIAL axis: verified-or-trusted): a fully-verified
+   * non-admin is denied on permission, not credential, so the two failure
+   * modes stay tellable at the wire and in the log.
+   */
+  public static final String ERR_ADMIN_PERMISSION = "admin_permission_required";
   public static final String ERR_SERVER = "server_error";
   /**
    * The mutation committed in memory but {@code User.save()} threw — the
