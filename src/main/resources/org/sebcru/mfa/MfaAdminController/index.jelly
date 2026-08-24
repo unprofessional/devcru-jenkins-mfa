@@ -65,6 +65,12 @@
             }
             h1 { font-size: 18px; margin: 0 0 8px 0; }
             p { font-size: 14px; color: #9aa4ae; margin: 0; }
+            .back {
+              color: #6fb0d3;
+              text-decoration: none;
+              font-size: 13px;
+            }
+            .back:hover { text-decoration: underline; }
             code { font-family: monospace; }
             @media (prefers-color-scheme: light) {
               body {
@@ -72,11 +78,15 @@
                 color: #1f2328;
               }
               p { color: #767676; }
+              .back { color: #1a5dab; }
             }
           </style>
         </head>
         <body>
           <div>
+            <p class="backline">
+              <a class="back" href="/manage/">← Manage Jenkins</a>
+            </p>
             <h1>403 — MFA administration</h1>
             <p>
               You do not have permission to view this page
@@ -167,6 +177,17 @@
           padding: 28px 0;
           font-size: 14px;
         }
+        /* D2 (2026-08-24): back link — the page was an island; this is the
+           route off it. Colour is explicit per scheme below (round-7 /
+           rule-12: never inherit a neighbouring rule's colour); target is
+           ABSOLUTE per the context-safe script-URL precedent. */
+        .back {
+          color: #6fb0d3;
+          font-size: 13px;
+          text-decoration: none;
+        }
+        .back:hover { text-decoration: underline; }
+        .backline { margin: 0 0 14px 0; }
         /* Explicit button colours in BOTH schemes (postmortem round 7:
            token names guessed white-on-white — the --btn-secondary-*
            family is declared by core's skin, but this is a standalone
@@ -258,6 +279,7 @@
           th { color: #767676; border-bottom: 1px solid #d0d7de; }
           td { border-bottom: 1px solid #eaeef2; }
           .none { color: #8c959f; }
+          .back { color: #1a5dab; }
           .factor-totp { background: #e6f4ea; color: #1e7e34; border: 1px solid #a8d5b5; }
           .factor-email { background: #e7f0fa; color: #1a5dab; border: 1px solid #a3c2e0; }
           .btn {
@@ -293,6 +315,10 @@
     </head>
     <body>
       <div class="card">
+        <p class="backline">
+          <a class="back" href="/manage/configureSecurity/">← Security
+              configuration</a>
+        </p>
         <h1>MFA administration</h1>
         <p class="sub">
           Enrolled users. Clearing factors is the lockout recovery (the user can
