@@ -39,9 +39,28 @@ authenticator app, the real theme, a real restart). Full analysis and the
 extracted rules:
 [`docs/2026-08-22-postmortem-live-rollout.md`](docs/2026-08-22-postmortem-live-rollout.md).
 
-**Known gap:** there is no admin UI for managing *other users'* factors
-(TECH_DEBT A22-b) — the documented recovery path for a locked-out user
-requires an admin to clear factor state, and that surface is not built yet.
+**Admin recovery path (A22-b, landed 2026-08-23):** an admin (a
+`Jenkins.ADMINISTER` holder who has verified their own second factor this
+login or is on a remembered device) can open <root>/mfaAdmin and read the
+enrolled-user roster, and on it: **Clear factors** (removes the target's
+TOTP seed, email factor, registered mailbox, remembered-device trust, and
+any pending code/lockout state in one pass) or **Revoke trust** (removes
+only the remembered-device trust, factors stay). Both verbs require the
+admin to type the target's user id in a confirmation dialog — a
+server-side check, not just a browser form field — and neither can be
+pointed at the admin's own account (self-service is the only path for that).
+An admin who is logged in but has not verified this session is bounced to
+the MFA page before they can reach the roster (the admin surface is
+deliberately NOT on the gate's allow-list, so the mutation endpoints are
+unreachable pre-verify at every layer). Both operations write a single
+loud audit line to the log. The complete recovery was walked in real Chromium
+under a non-root Jenkins context: the admin verified TOTP, opened the roster in
+both colour schemes, typed the target id, cleared the account, and the target
+logged in password-only and re-enrolled a fresh TOTP factor; after a Jenkins
+restart both factors and the least-privilege refusal were re-proven. The static
+action script is context-rooted, so the buttons also work when Jenkins is served
+beneath a prefix such as `/jenkins`. The spec and rulings:
+[`docs/todo/2026-08-23-A22b-admin-factor-management-spec.md`](docs/todo/2026-08-23-A22b-admin-factor-management-spec.md).
 
 What follows documents the built system as it landed through Task 8.
 
@@ -98,8 +117,11 @@ architecture & design-decision record used to audit the code.
 > known edge is *who can open that screen on a given install* (the
 > security tab is core's admin-facing page — see "Enrolling your factors"
 > below). The live cutover to the production box landed 2026-08-22
-> (Task 10); the remaining functional gap is admin management of *other
-> users'* factors (TECH_DEBT A22-b, not built).
+> (Task 10); the admin recovery surface (clear/revoke *another* user's
+> factors, TECH_DEBT A22-b) landed 2026-08-23 — including the restart
+> -survival proof (a cleared user stays cleared across a Jenkins restart,
+> and re-enrols end to end after it) — see the "Admin recovery
+> path" paragraph above the project-doc index.
 
 ### Enrolling
 
@@ -126,19 +148,21 @@ architecture & design-decision record used to audit the code.
   re-enrolled account starts clean) and *Revoke this device's trust*
   (sign everyone else out again; the current session ends the trust itself).
   An admin clearing someone's factors entirely for a full lockout is the
-  documented recovery path — there is no self-service "reset everything",
-  by design.
+  documented recovery path — see the "Admin recovery path" paragraph above
+  (the `/mfaAdmin` surface, admin-only + this-session-verified or
+  remembered-device, with a typed-id confirmation). There is no
+  self-service "reset everything", by design.
 - **Who can open that section on a given install:** it is the core-security
   tab, which core renders only to holders of the *Overall/Administer*
   permission. On this project's target setup (a single admin, `mads`) that
   means exactly one person can open it — which is the intended shape: the
   plugin is not built to be a self-serve portal for hundreds of strangers.
   The section's endpoints act only on the *currently-logged-in* user, so a
-  button can never be pointed at someone else's profile (see the A22 note
-  in `docs/todo/TECH_DEBT.md` for the boundary and the deliberate
-  non-goals). If a later need appears for an admin managing *other*
-  accounts' factors, that is a small, documented follow-up — it has not
-  been built.
+  self-service button can never be pointed at someone else's profile. Admin
+  recovery for another enrolled account is deliberately separated onto the
+  `/mfaAdmin` surface described above: it requires *Overall/Administer* plus a
+  verified or remembered factor, forbids self-targeting, and requires the
+  target id to be typed exactly before clear/revoke.
 
 ### Day-to-day login
 
@@ -248,7 +272,10 @@ architecture & design-decision record used to audit the code.
   does a not-yet-enrolled user (they are passed by the gate and must keep
   self-enrolment access).
 - **Lost everything (lost phone and mailbox).** Documented admin recovery
-  path clears the user's stored factor state; the user re-enrolls. No
+  path clears the user's stored factor state; the user re-enrolls. The clear
+  is persisted — the unenrolled state survives a Jenkins restart, and the
+  re-enrolment completes end to end after it (booted-test proven, the
+  restart-survival leg of the A22-b admin IT). No
   self-service reset, by design — now *enforced*: a session that has not
   freshly proven a factor (or holds live trust) gets a 403 from every
   factor-management endpoint, so "reset everything" by password alone is

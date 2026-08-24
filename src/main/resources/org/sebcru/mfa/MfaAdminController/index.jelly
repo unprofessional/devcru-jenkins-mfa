@@ -1,0 +1,273 @@
+<?jelly escape-by-default='false'?>
+<!--
+  The A22-b admin page (MfaAdminController index view, mounted at
+  <root>/mfaAdmin). A self-contained document exactly like the MFA
+  verification page (index.jelly next door): no l:layout wrapper, so it
+  must declare its own Content-Type (postmortem round 3), nosniff
+  (round 2/3), ship its JS as a STATIC file (round 2 CSP rule — no inline
+  scripts), and declare every element of the dark-theme button palette
+  explicitly (round 7 white-on-white ghost buttons).
+
+  The view is deliberately DUMB: the controller's getRosterRows() is the
+  render model (ruling 4: enrolled-only for now; A24's force-enrolment
+  column will be a row-field addition). The verbs themselves are the two
+  static-JS POSTs to clearFactors / revokeTrust — NOT wired here, because
+  the page's JS must also enforce the typed-user-id confirmation (mads
+  ruling 5: "100% user typed confirmation"), and the ENDPOINT re-checks
+  that typed value server-side (UX and server-side are the same test).
+
+  Privacy: the roster shows only the user id, display name, and the
+  MASKED delivery address (A16). No plaintext registered mailbox ever
+  reaches this DOM; the row's factor columns say which factors exist.
+-->
+<j:jelly xmlns:j="jelly:core" xmlns:x="jelly:xml" xmlns:st="jelly:stapler">
+  <st:contentType value="text/html;charset=UTF-8"/>
+  <st:setHeader name="Cache-Control" value="no-cache,no-store,must-revalidate"/>
+  <st:setHeader name="X-Content-Type-Options" value="nosniff"/>
+  <!--
+    The page-level READ gate (Ruling 3, spec §4: ADMINISTER may READ the
+    roster; the credential axis belongs to the verbs, not to the page).
+    RootAction is not permission-gated by core — the view is, through this
+    branch. The 403 body carries the stable token admin_permission_required
+    (the surface's permission-denial vocabulary) so a strict consumer can
+    distinguish it from a core 403 error page; the verbs keep the JSON
+    envelope (spec-pinned).
+  -->
+  <j:choose>
+    <j:when test="${!it.adminPageAllowed()}">
+      <st:statusCode value="403"/>
+      <x:doctype name="html"/>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8"/>
+          <meta name="robots" content="noindex,nofollow"/>
+          <title>403 Forbidden — MFA administration</title>
+        </head>
+        <body style="background:#101418;color:#e8eaed;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0">
+          <div>
+            <h1 style="font-size:18px;margin:0 0 8px 0">403 — MFA administration</h1>
+            <p style="font-size:14px;color:#9aa4ae;margin:0">
+              You do not have permission to view this page
+              (<span style="font-family:monospace">admin_permission_required</span>).
+            </p>
+          </div>
+        </body>
+      </html>
+    </j:when>
+    <j:otherwise>
+  <x:doctype name="html"/>
+  <html lang="en">
+    <head>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1"/>
+      <meta name="robots" content="noindex,nofollow"/>
+      <title>MFA administration — Jenkins</title>
+      <style>
+        :root { color-scheme: light dark; }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #101418;
+          color: #e8eaed;
+        }
+        .card {
+          width: 100%;
+          max-width: 860px;
+          margin: 24px;
+          background: #1a1f24;
+          border: 1px solid #2a3138;
+          border-radius: 12px;
+          padding: 28px 32px;
+        }
+        h1 {
+          font-size: 20px;
+          font-weight: 600;
+          margin: 0 0 6px 0;
+          color: #e8eaed;
+        }
+        .sub {
+          font-size: 13px;
+          color: #9aa4ae;
+          margin: 0 0 20px 0;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 14px;
+        }
+        th {
+          text-align: left;
+          font-weight: 600;
+          color: #9aa4ae;
+          font-size: 12px;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          padding: 8px 10px;
+          border-bottom: 1px solid #2a3138;
+        }
+        td {
+          padding: 10px;
+          border-bottom: 1px solid #232a30;
+          vertical-align: middle;
+        }
+        .mono {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 13px;
+        }
+        .factor {
+          display: inline-block;
+          border-radius: 4px;
+          padding: 2px 8px;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        .factor-totp { background: #1f3a2d; color: #6fd39a; border: 1px solid #2c5a43; }
+        .factor-email { background: #1f2e3a; color: #6fb0d3; border: 1px solid #2c4a5a; }
+        .none { color: #5c6770; font-size: 12px; }
+        .empty {
+          text-align: center;
+          color: #9aa4ae;
+          padding: 28px 0;
+          font-size: 14px;
+        }
+        /* Explicit button colours in BOTH schemes (postmortem round 7:
+           token names guessed white-on-white — the --btn-secondary-*
+           family is declared by core's skin, but this is a standalone
+           page with no skin context, so the colours are literal). */
+        .btn {
+          border-radius: 6px;
+          font-size: 12px;
+          font-weight: 600;
+          padding: 6px 12px;
+          cursor: pointer;
+          border: 1px solid #3a444d;
+          background: #2a333c;
+          color: #e8eaed;
+          margin-right: 6px;
+        }
+        .btn:hover { background: #323d47; }
+        .btn-danger {
+          border: 1px solid #5a2c2c;
+          background: #3a1f1f;
+          color: #e88;
+        }
+        .btn-danger:hover { background: #4a2626; color: #ffb3b3; }
+        .btn:disabled { opacity: 0.45; cursor: default; }
+        /* The typed-confirmation dialog (mads ruling 5). */
+        .veil {
+          position: fixed; inset: 0;
+          background: rgba(0,0,0,0.55);
+          display: flex; align-items: center; justify-content: center;
+        }
+        .dialog {
+          background: #1a1f24;
+          border: 1px solid #2a3138;
+          border-radius: 10px;
+          padding: 22px 26px;
+          width: 420px;
+          max-width: 92vw;
+        }
+        .dialog h2 {
+          font-size: 15px; margin: 0 0 8px 0; color: #ffd7d7; font-weight: 600;
+        }
+        .dialog p {
+          font-size: 13px; color: #9aa4ae; margin: 0 0 14px 0;
+        }
+        .dialog .target { color: #e8eaed; font-weight: 700; }
+        .dialog input {
+          width: 100%;
+          padding: 9px 10px;
+          border-radius: 6px;
+          border: 1px solid #3a444d;
+          background: #101418;
+          color: #e8eaed;
+          font-size: 14px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          margin-bottom: 16px;
+        }
+        .dialog .row { text-align: right; }
+        .result {
+          font-size: 13px;
+          padding: 8px 12px;
+          border-radius: 6px;
+          margin-top: 10px;
+        }
+        .result-ok { background: #1f3a2d; color: #6fd39a; border: 1px solid #2c5a43; }
+        .result-err { background: #3a1f1f; color: #e88; border: 1px solid #5a2c2c; }
+        noscript { color: #e88; font-size: 13px; display: block; margin-top: 12px; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>MFA administration</h1>
+        <p class="sub">
+          Enrolled users. Clearing factors is the lockout recovery (the user can
+          self-enrol again); revoking trust forces a re-verify at their next
+          login. Both verbs require typing the target's user id.
+        </p>
+        <noscript>JavaScript is required to perform factor operations; the roster is shown read-only.</noscript>
+        <j:choose>
+          <j:when test="${it.rosterRows.isEmpty()}">
+            <div class="empty">No enrolled users.</div>
+          </j:when>
+          <j:otherwise>
+            <table id="adminRoster">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Delivery address</th>
+                  <th>Factors</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <j:forEach var="row" items="${it.rosterRows}">
+                  <tr data-user-id="${row.userId}" data-display="${row.displayName}">
+                    <td class="mono"><j:out value="${row.userId}"/></td>
+                    <td class="mono"><j:out value="${row.maskedMail}"/></td>
+                    <td>
+                      <j:if test="${row.isTotp()}">
+                        <span class="factor factor-totp">TOTP</span>
+                      </j:if>
+                      <j:if test="${row.isEmail()}">
+                        <span class="factor factor-email">EMAIL</span>
+                      </j:if>
+                      <j:if test="${!row.isTotp() and !row.isEmail()}">
+                        <span class="none">none</span>
+                      </j:if>
+                    </td>
+                    <td>
+                      <button type="button" class="btn btn-danger"
+                              data-op="clearFactors"
+                              data-user-id="${row.userId}"
+                              data-display="${row.displayName}">Clear factors</button>
+                      <button type="button" class="btn"
+                              data-op="revokeTrust"
+                              data-user-id="${row.userId}"
+                              data-display="${row.displayName}">Revoke trust</button>
+                    </td>
+                  </tr>
+                </j:forEach>
+              </tbody>
+            </table>
+          </j:otherwise>
+        </j:choose>
+        <div id="adminResult" style="display:none"/>
+      </div>
+      <!-- JS config via data attributes (the house pattern from mfa-section.js):
+           the script reads exactly these, nothing else. -->
+      <div id="mfaAdminConfig"
+           data-base="${it.mfaAdminBaseUrl}"
+           data-crumb-field="${it.crumbField}"
+           data-crumb-value="${it.crumbValue}"></div>
+      <script src="${it.adminScriptUrl}"></script>
+    </body>
+  </html>
+  </j:otherwise>
+  </j:choose>
+</j:jelly>
