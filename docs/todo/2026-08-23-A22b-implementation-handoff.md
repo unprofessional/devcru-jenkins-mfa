@@ -1,4 +1,10 @@
-# A22-b admin factor-management — handoff (v4, 2026-08-23, PRE-MERGE / NEXT TASKS)
+# A22-b admin factor-management — handoff (v4, 2026-08-23, NEXT TASKS)
+
+> **§1 progress (2026-08-23):** §1-A DONE (commit `14dc5d2`) and §1-B DONE
+> (theming fix + `MfaAdminIndexThemeTest` pin + browser proof, this commit)
+> both on branch `a22b-1a-cleanup`. **§1-C (A24) is NOT started** — it is a
+> separate spec-first PR awaiting mads's rulings. Nothing below §1-C has been
+> touched.
 
 Written for Sebastian (next session). **A22-b is APPROVED and is being merged
 to `develop` by mads.** This handoff now hands you the POST-MERGE next steps
@@ -79,20 +85,53 @@ done — especially anything credential-shaped:
   no credential/seed/cookie material sitting on disk. Never leave throwaway
   credentials on disk after the run that needed them.
 
-### §1-B — Fix the admin page theming (the real light/dark gap)
+### §1-B — Fix the admin page theming (the real light/dark gap) — ~~open~~ DONE 2026-08-23 (branch `a22b-1a-cleanup`, same branch as §1-A)
 
-The admin page is dark-only. Make the theming correct so light and dark are
-genuinely distinct:
+Executed 2026-08-23, per the house ruling above (Jenkins' own pages follow the
+user's theme): `MfaAdminController/index.jelly` is now genuinely dual-theme —
+the base rules are the dark theme and a `@media (prefers-color-scheme: light)`
+block re-paints EVERY painted surface, using the house light palette already
+established in `MfaUserProperty/config.jelly` (`#1f2328` text, `#f8f9fa`
+buttons, `#d0d7de` borders, `#1e7e34`/`#b3261e` success/error). The 403
+denial arm got its own dual-theme stylesheet too, so the denial page is not a
+dark hole in a light UI.
 
-- Decide the target with the house style (Jenkins' own pages follow the user's
-  theme). Either make `MfaAdminController/index.jelly` theme-aware (respect
-  `prefers-color-scheme` / Jenkins' theme tokens) or, if dark-only is the
-  ruling, document that explicitly — but do NOT leave it silently dark-only
-  while claiming both themes.
-- Re-render under BOTH emulated schemes and capture two screenshots that are
-  actually different (different md5). That is the acceptance for this task.
-- This is real-browser work: run it ON qwen and confirm the model in your
-  report (Correction 1).
+Pinned by `src/test/java/org/sebcru/mfa/MfaAdminIndexThemeTest`
+(BDD per the house rule, `TotpTest` shape): both-scheme `color-scheme`
+declaration, per-surface light coverage (no inherited dark islands),
+light-vs-dark body background actually different (the source-level form of
+the screenshot-md5 acceptance), and theme-aware 403 arm. Honest red phase:
+written against the dark-only page first — the light-block and 403 pins
+failed with `expected: not <null>` / `expected: <true> but was: <false>`,
+then went green on the fix.
+
+**Acceptance met — real-browser walk, on qwen3.8:27b-mtp-q8_0 (Correction 1
+honoured: the model in this report is Qwen 3.8 27B MTP Q8_0 running under the
+Hermes harness; all pixels below were inspected natively by it).** `hpi:run`
+on :8081, headful Chromium 151 under `:99`, real admin login + TOTP verify to
+the roster, and the denial arm reached as an ANONYMOUS visitor (the
+`actor == null` branch of `answerAdminDenied` — the strategy was never
+touched, so no sandbox state was mutated). `Emulation.setEmulatedMedia` on
+both schemes, one run each; computed `matchMedia` confirmed the emulated
+value was actually applied.
+
+- roster light md5 `25cd8d3636183c96b2c2580597a1589f` vs roster dark
+  md5 `89106fd116bb771fd5acf2685b1e64c6` — **differ**
+- 403 light md5 `395188c74dfbb336fd9e17d223a7c25e` vs 403 dark md5
+  `c33482a6dfb83d8c9426abdf91c129c4` — **differ** (full values also in
+  ignored `.scratch/theme-1b-md5.json`)
+- **crossover check**: the stale A22-b record `03-admin-roster-dark.png` and
+  `04-admin-roster-light.png` share md5 `792f1748c652…` (the proof of the
+  overclaim); the NEW light render differs from both. The page is no longer
+  one theme wearing two labels.
+- body background measured live: dark `rgb(16,20,24)` / light
+  `rgb(255,255,255)` on both surfaces; native-pixel inspection confirmed no
+  off-theme islands in either scheme (badges, buttons, dialog input all
+  recoloured).
+- `mvn clean verify -o` (CI mirror): BUILD SUCCESS, 117 tests, 0 failures,
+  SpotBugs clean — including the new theme pins.
+
+§1-C (A24) deliberately untouched, pending its own spec-first PR.
 
 ### §1-C — A24: the third verb — force-enrol + first-time MFA setup UI
 
