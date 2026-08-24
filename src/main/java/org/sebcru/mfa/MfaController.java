@@ -1517,6 +1517,7 @@ public class MfaController implements RootAction {
       case "signup":
       case "j_acegi":
       case "mfa":
+      case "mfaadmin":
       case "securityrealm":
       case "security":
         return true;

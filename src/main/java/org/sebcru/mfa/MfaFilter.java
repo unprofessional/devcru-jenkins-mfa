@@ -363,7 +363,21 @@ public final class MfaFilter implements Filter {
       p = "/" + p;
     }
     for (String prefix : ALLOWED_PREFIXES) {
-      if (p.startsWith(prefix)) {
+      if (prefix.equals("/mfa")) {
+        // Segment-precise (A22-b — second instance of the A23 sibling-sweep
+        // class): a bare startsWith("/mfa") also swept /mfaAdmin/* through the
+        // allow-list, letting an allow-listed sibling reach factor-destroying
+        // mutations without the normal decision chain. The MFA page is served
+        // BARE at /mfa (optionally with a ?redirect= query) and its endpoints
+        // at /mfa/<token>; match exactly those two shapes so the new,
+        // deliberately NOT allow-listed admin surface (/mfaAdmin) falls
+        // through to steps 6–9 and is gated like any other protected page
+        // (verified/trusted/exempt/unenrolled users still pass; a
+        // password-only enrolled user is bounced).
+        if (p.equals("/mfa") || p.startsWith("/mfa?") || p.startsWith("/mfa/")) {
+          return true;
+        }
+      } else if (p.startsWith(prefix)) {
         return true;
       }
     }
