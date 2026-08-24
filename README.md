@@ -333,6 +333,16 @@ Java 21 + Maven 3.9+:
 mvn package        # → target/devcru-mfa.hpi
 ```
 
+## Deploy
+
+Self-deploying: merges to `master` trigger the root [`Jenkinsfile`](Jenkinsfile)
+via the GitHub webhook — it verifies offline, snapshots the controller
+off-host, installs the `.hpi` through `jenkins-cli`, restarts, and runs a
+smoke battery on the same instance it just updated (pipeline durability
+resumes the build after the restart). Rollback ladder is documented in the
+Jenkinsfile header. The manual rung (CLI from an agent host + off-host
+snapshot) stays the recovery path if the self-deploy itself is what broke.
+
 ## Workflow
 
 All development on `develop`; `master` advanced only on explicit mads approval per step.
