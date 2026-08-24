@@ -126,7 +126,13 @@ architecture & design-decision record used to audit the code.
 > factors, TECH_DEBT A22-b) landed 2026-08-23 — including the restart
 > -survival proof (a cleared user stays cleared across a Jenkins restart,
 > and re-enrols end to end after it) — see the "Admin recovery
-> path" paragraph above the project-doc index.
+> path" paragraph above the project-doc index. Deploy reliability: the
+> plugin self-deploys through its own Jenkins pipeline (merge to master →
+> build → deploy to the same instance), and every deploy now takes a
+> pre-deploy snapshot of the controller's state that is integrity-checked
+> (valid archive, real entry count, sha sidecar) *before* anything is
+> touched — a corrupt or truncated snapshot fails the build instead of
+> becoming the rollback rung you reach for later.
 
 ### Enrolling
 

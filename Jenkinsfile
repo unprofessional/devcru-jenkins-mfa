@@ -108,16 +108,35 @@ pipeline {
                 // construction: it lands on this agent host, not the
                 // controller. Never snapshot-with-Jenkins-stopped is NOT the
                 // rule we break willingly; it is the only rung we have.
+                //
+                // Pipeline runs sh steps under /bin/sh (dash on this agent).
+                // dash REJECTS `set -o pipefail` — build #5 died on exactly
+                // that line (exit 2: "Illegal option -o pipefail") before the
+                // ssh ever ran. So this stage is dash-native and does NOT use
+                // pipefail. Instead it keeps the same safety guarantee
+                // explicitly: without pipefail a dead ssh would be masked by
+                // pigz's exit 0, producing a truncated "snapshot". The gate
+                // below fails the build unless the artifact is a valid gzip
+                // that actually contains a real number of entries — so a
+                // mid-stream ssh death can never become a rollback rung.
                 sh '''
+                    set -eu
                     export PATH="/opt/jdk-21.0.12+8/bin:$PATH"
                     mkdir -p "$SNAPDIR"
                     TS=$(date +%Y%m%d-%H%M%S)
                     OUT="$SNAPDIR/jenkins-snapshot-$TS.tar.gz"
-                    set -o pipefail
-                    ssh $SSHOPTS "$EDGE" "tar cf - -C $JHOME --exclude=war/work --exclude=workspace . 2>/tmp/pipe-snapshot-err.log" \\
+                    ssh $SSHOPTS "$EDGE" "tar cf - -C $JHOME --exclude=war/work --exclude=workspace . 2>/tmp/pipe-snapshot-err.log" \
                       | pigz -p 8 > "$OUT"
+                    # Integrity gate (dash-safe replacement for pipefail):
+                    # a gzip that fails to decompress, or a stream that died
+                    # and left a near-empty archive, aborts BEFORE deploy.
+                    gzip -t "$OUT" \
+                      || { echo "FATAL: snapshot gzip integrity test failed — not deploying"; exit 1; }
+                    ENTRIES=$(tar tzf "$OUT" | wc -l)
+                    [ "$ENTRIES" -ge 100 ] \
+                      || { echo "FATAL: snapshot has only $ENTRIES entries — source died mid-stream, not deploying"; exit 1; }
                     sha256sum "$OUT" > "$OUT.sha256"
-                    echo "snapshot: $OUT"
+                    echo "snapshot: $OUT ($ENTRIES entries)"
                     cat "$OUT.sha256"
                     ssh $SSHOPTS "$EDGE" "cat /tmp/pipe-snapshot-err.log | grep -v '.docker\\|.java/fonts' | head -5 || true"
                     # Retention: keep latest 2 snapshots.
@@ -182,17 +201,15 @@ pipeline {
                     sh '''
                         set -e
                         A="curl -sf -u rally:$JK_TOKEN"
-                        # 1. Plugin loaded and active.
-                        $A "$CONTROLLER/pluginManager/api/json?depth=1" \\
-                          | python3 -c "
-import json, sys
-ps = [p for p in json.load(sys.stdin)['plugins'] if p['shortName'] == 'devcru-mfa']
-assert ps and ps[0]['active'] and ps[0]['enabled'], 'devcru-mfa not active'
-print('plugin: devcru-mfa', ps[0]['version'], 'active')"
+                        # 1. Plugin loaded and active. (Single-line python —
+                        # multi-line strings after a backslash newline are not
+                        # dash-parseable: `dash -n` rejects the `|` on the
+                        # follow-up line. The agent's sh is dash.)
+                        $A "$CONTROLLER/pluginManager/api/json?depth=1" | python3 -c "import json,sys; ps=[p for p in json.load(sys.stdin)['plugins'] if p['shortName']=='devcru-mfa']; assert ps and ps[0]['active'] and ps[0]['enabled'], 'devcru-mfa not active'; print('plugin: devcru-mfa', ps[0]['version'], 'active')"
                         # 2. Admin surface renders for an admin AND carries the
                         #    dual-theme stylesheet (proves the new bits are live).
                         $A "$CONTROLLER/mfaAdmin/" -o /tmp/smoke-mfaadmin.html
-                        grep -q "prefers-color-scheme: light" /tmp/smoke-mfaadmin.html \\
+                        grep -q "prefers-color-scheme: light" /tmp/smoke-mfaadmin.html \
                           || { echo "FATAL: light theme block missing from rendered page"; exit 1; }
                         echo "admin surface: renders + light theme block present"
                         # 3. Static JS serves under an authed session.
