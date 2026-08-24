@@ -18,92 +18,78 @@ JDK for javap: `export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"`.
 
 ---
 
-## 0. Status — IMPLEMENTED, COMMITTED, PUSHED, REVIEWED: APPROVED; **§1 TASK NOW COMPLETE (this commit)**
+## 0. Status — IMPLEMENTED, RESTART-PROVEN, REAL-BROWSER ACCEPTED
 
-- Branch `a22b-spec` @ `d2a9008` (pushed to `origin/a22b-spec`); the §1
-  restart leg lands as a NEW commit on top (this handoff's stamp commit).
-  **No PR** (per ruling). The two v2 defects are RESOLVED — full story in
-  the `d2a9008` commit message and in §5 below.
-- **All gates green at commit:** `MfaAdminIT` 5/5 (booted Jenkins, FCOL +
-  hand-rolled least-privilege SidACL), `AdminManageAllowedTest` 6/6,
-  `FilterLogicTest` 15/15, `MfaFilterIT` 9/9, `TotpTest` 5/5. SpotBugs clean,
-  `devcru-mfa.hpi` builds, `mvn -o -B clean verify` BUILD SUCCESS.
-- **External review (Moldy, 2026-08-23): APPROVED.** She independently re-ran
-  `mvn -o -B clean verify` from a clean checkout (224 tests, 0 fail, SpotBugs
-  clean, hpi builds) and reviewed the seam, the filter carve-out, and the IT.
-  Her verdict: the Defect-2 seam fix is correct and "the whole show"; leg 4(d)
-  is the genuine red→green discriminator. **One open item** — see §1.
-- TECH_DEBT: A22-b is in the Resolved table (the code shipped). The §1
-  acceptance item is tracked under "Not in the code yet."
+- Branch `a22b-spec`; restart-survival work is committed/pushed through
+  `05ebb43`. The current acceptance/fix commit sits on top and is pending its
+  final `clean verify` + commit/push gate. **No PR** (per ruling).
+- Booted-Jenkins coverage is six `MfaAdminIT` legs, including the
+  restart-survival round trip. The real-browser walk then booted the branch
+  through `hpi:run` under the real `/jenkins` context and drove a second
+  headful Chromium on Xvfb — not HtmlUnit and not the collector browser.
+- **Browser finding and fix:** the roster rendered, but both action buttons
+  were dead because `getAdminScriptUrl()` emitted relative
+  `plugin/devcru-mfa/mfa-admin.js`; Chromium resolved it beneath
+  `/jenkins/mfaAdmin/`. `MfaAdminIT` was made red on the rendered script URL,
+  then `getAdminScriptUrl()` was fixed to root the resource at Stapler's
+  current context (`/jenkins/plugin/...` live). The same leg is green 6/6.
+- **Full journey passed in real Chromium:** admin password login → live TOTP
+  verification → enrolled-only roster (`admin`, `sac`) with no raw mailbox in
+  the DOM → dark and light media renders → typed-id confirmation disabled on
+  mismatch/enabled on exact `sac` → clear succeeds and removes `sac` from the
+  roster → `sac` reaches the dashboard password-only → generates a fresh QR
+  and seed on Security → confirms a live TOTP → passes the immediate MFA gate
+  → appears enrolled again.
+- **Restart/browser persistence passed:** after restarting the actual
+  `hpi:run` JVM, remembered trust survived; each user revoked it through the
+  Security UI, then admin's original TOTP and `sac`'s newly-enrolled TOTP both
+  verified. The admin roster reloaded as `admin,sac`; least-privilege
+  `reader` reloaded and received 403 `admin_permission_required` on
+  `/mfaAdmin/`.
+- Executable, non-secret CDP journeys and the sandbox fixture live under
+  `scripts/acceptance/a22b/`. Generated credentials, browser profile, logs,
+  candidate seeds and screenshots remain ignored under `.scratch/`; none
+  enter Git.
 
-## 1. YOUR NEXT TASK — the restart-survival leg (spec §7 case 3, §10)
+## 1. Restart-survival leg (spec §7 case 3, §10) — COMPLETE
 
-> **COMPLETE (this commit).** `MfaAdminIT` leg 6
-> `clearedVictimSurvivesRestartAndRecoveryCompletes` — exactly the shape
-> sketched below: leg 5's clear flow → on-disk `config.xml` anti-vacuity
-> anchor (the clear really reached disk) → `rule.restart()` → (a) victim
-> reloaded STILL cleared (no TOTP/email/mailbox/trust resurrection, and
-> the on-disk `totpSecret` element still absent), (b) fresh password-only
-> victim session reaches the dashboard 200 (the reloaded gate passes an
-> unenrolled user), (c) victim re-enrolls end to end (`postEnroll` →
-> `postEnrollConfirm` with a live code — the README's documented recovery
-> path), (d) admin's own factors survive byte-for-byte AND are live (a
-> post-restart verified admin clears a sacrificial second victim through
-> the same verb). **Persistence finding: none — the round-trip held on
-> the first running signal (6/6, no red).** First two runs were compile
-> failures of the leg's own mechanics (regex-package typo; `restart()`
-> declares `Throwable` → `throws Throwable`), recorded in the IT's
-> javadoc. `mvn -o -B clean verify` green: 113 tests (112 baseline +
-> leg 6), 0 fail, SpotBugs clean, hpi built. BDD-documented; README
-> recovery paragraph and TECH_DEBT (resolved table + closure marker)
-> updated in the same commit per AGENTS.md. Out-of-scope items (both-
-> themes render, real-browser walk) NOT bundled — open with mads whether
-> they gate this task or wait.
+`MfaAdminIT.clearedVictimSurvivesRestartAndRecoveryCompletes` proves leg 5's
+clear flow → on-disk `config.xml` anti-vacuity anchor → `rule.restart()` →
+(a) victim reloaded still cleared, (b) a fresh password-only victim session
+reaches the dashboard, (c) victim re-enrols end to end, and (d) the admin's
+own factors survive byte-for-byte and remain live. No persistence defect was
+found. The real-browser walk above independently exercised the same consumer
+journey against the actual `hpi:run` process and a second real Chromium.
 
-This is the one thing the review found standing between "merged" and
-"live-ready." The spec set a higher done-bar than the branch cleared.
+### §10 breadth-of-consideration ledger
 
-**Why.** Spec §7 case 3 called the restart leg "not negotiable for a
-credential-clearing op," and §10 item 2 requires it. Right now the clear's
-persistence is proven only at the seam level (`clearFactorState` byte-for-byte
-in `AdminManageAllowedTest`) and `target.save()` is called — but nothing yet
-proves the persisted clear **survives a Jenkins restart**. For an op that
-destroys credentials, that's the leg that has to exist.
+1. **Host:** `hpi:run` served Jenkins 2.528.3 at the non-root `/jenkins`
+   context. Probe found the relative static-script URL defect; context-rooted
+   URL fixed and pinned in `MfaAdminIT`.
+2. **Runtime envelope:** second headful snap Chromium ran on isolated CDP 9333
+   under Xvfb `:99`; the collector browser/CDP 9222 was not touched. Jenkins
+   CSP loaded the corrected same-origin static script.
+3. **External consumer:** real Chromium completed login, TOTP, roster,
+   typed-confirmation mutation, password-only recovery, QR/manual-seed
+   re-enrolment, and post-restart verification. HtmlUnit alone was not treated
+   as acceptance.
+4. **Environments:** standalone admin page captured under emulated dark and
+   light `prefers-color-scheme`; controls remained present and legible.
+5. **Privilege:** sandbox-only one-admin `SidACL` granted ADMINISTER only to
+   `admin`, READ to authenticated users. `reader` reached the dashboard but
+   `/mfaAdmin/` answered 403 `admin_permission_required`, including after
+   restart.
+6. **Time/order:** confirmation began disabled, remained non-operative until
+   exact target id `sac`, then single-flight clear completed. Newly enrolling
+   `sac` was immediately gated and had to verify the new factor before return.
+7. **Restart:** actual `hpi:run` JVM restarted. Admin factor, newly-enrolled
+   victim factor, remembered trust, roster, and least-privilege denial all
+   survived; trust was revoked through each user's UI before proving both
+   TOTP factors live again.
 
-**What to build.** One new `@Test` leg in `MfaAdminIT.java`, extending leg 5's
-setup (`verifiedAdminClearsLockedOutVictimAndOwnFactorsSurvive`):
-
-1. Verified admin clears a locked-out victim (reuse leg 5's enroll/verify/clear
-   flow — the victim ends fully unenrolled, `target.save()` persisted).
-2. `rule.restart()` — restart the Jenkins instance (reloads from disk).
-3. **After restart**, assert:
-   - the victim's `MfaUserProperty` is still cleared (unenrolled) — i.e. the
-     clear persisted to disk and reloaded, NOT resurrected;
-   - the gate now passes the victim (unenrolled = exempt) — they can log in
-     with password only;
-   - the victim can re-enrol (the README's documented recovery path, end to
-     end);
-   - the ADMIN's own factors also survived the restart (no collateral loss).
-4. The leg is the postmortem's restart lesson applied to A22-b: "what survives
-   / what breaks across a restart" must be asserted, not assumed.
-
-**Definition of done for THIS task:**
-1. New leg written first and proven meaningful (it asserts real post-restart
-   state, not a tautology). If it exposes a persistence bug, that's the point —
-   fix it, record the red→green honestly.
-2. BDD-documented per AGENTS.md (WHAT / GIVEN-WHEN-THEN in `<pre>` /
-   WHY-SOLVES), and the class-level red→green history note updated with this leg.
-3. README practical-usage re-checked (the recovery paragraph should already
-   describe this; verify it matches what the leg proves).
-4. `mvn -o -B clean verify` green (SpotBugs + enforcer + unit + IT + `.hpi`).
-5. Commit via `git commit -F <msgfile>`, read back (`git log -1`), push
-   `git push origin a22b-spec`. **No PR.**
-6. Report to mads: green tally + what the leg asserts + any persistence finding.
-
-**Out of scope unless mads says otherwise:** spec §10 also lists a both-themes
-render of the admin page and a real-browser walk on the dev instance. Do the
-restart leg FIRST; then ask mads whether those gate this task or wait. Do not
-bundle them in silently.
+**Acceptance result:** §10's both-theme and real-browser items are complete.
+The final repository gate remains `mvn -o -B clean verify`, then commit/readback
+and push to `a22b-spec`; no PR.
 
 ## 2. IT shape + helpers (reference for the restart leg)
 
