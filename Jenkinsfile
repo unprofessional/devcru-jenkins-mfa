@@ -17,8 +17,13 @@
 // (kept on the yharnam agent host, latest 2). Do not automate rung 3 here:
 // if this pipeline broke the deploy, this pipeline is not the recovery tool.
 //
-// Requires on the yharnam agent: the jdk/maven toolchain (see Toolchain
-// stage), ssh-as-ranger to the controller host, pigz.
+// Requires on the yharnam agent (it runs as user `jenkins`, NOT hunter —
+// /home/hunter is 750 and unreachable from CI):
+//   - JDK 21:      /usr/lib/jvm/java-21-openjdk-amd64 (system, present)
+//   - Maven 3.9+:  /opt/apache-maven-3.9.11 (world-readable copy of hunter's)
+//   - offline repo seeded at /home/jenkins/.m2/repository
+//   - ssh keypair for user jenkins, pubkey trusted by ranger@shinraedge2
+//   - pigz (present), curl, python3
 // Requires in Jenkins: secret-text credential `jenkins-rally-api-token`
 // (rally's API token; API-token sessions are MFA-gate-exempt).
 
@@ -35,16 +40,20 @@ pipeline {
         // Direct LAN route — the deploy path does not depend on nginx/TLS.
         CONTROLLER = 'http://192.168.7.35:8080'
         EDGE       = 'ranger@192.168.7.35'
+        // Fresh CI user = empty known_hosts; never let ssh hang on a prompt.
+        SSHOPTS    = '-o StrictHostKeyChecking=accept-new -o BatchMode=yes'
         JHOME      = '/var/lib/jenkins'
-        SNAPDIR    = '/home/hunter/backups/jenkins-snapshots'
+        SNAPDIR    = '/home/jenkins/backups/jenkins-snapshots'
         CLIJAR     = '/tmp/jenkins-cli.jar'
     }
 
     stages {
         stage('Toolchain') {
             steps {
+                // Absolute paths: the agent user is `jenkins`, so $HOME is
+                // /home/jenkins — never $HOME-relative toolchain paths here.
                 sh '''
-                    export PATH="$HOME/opt/jdk-21.0.12+8/bin:$HOME/opt/apache-maven-3.9.11/bin:$PATH"
+                    export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:/opt/apache-maven-3.9.11/bin:$PATH"
                     java -version 2>&1 | head -1
                     mvn -version 2>&1 | head -1
                     # Fresh CLI jar matching the live controller, every run.
@@ -57,7 +66,7 @@ pipeline {
             steps {
                 // The ONLY full validation — mirrors CI incl. SpotBugs.
                 sh '''
-                    export PATH="$HOME/opt/jdk-21.0.12+8/bin:$HOME/opt/apache-maven-3.9.11/bin:$PATH"
+                    export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:/opt/apache-maven-3.9.11/bin:$PATH"
                     mvn -o -B clean verify
                 '''
             }
@@ -72,7 +81,7 @@ pipeline {
                     // Fails (and aborts) if the live file is unreadable —
                     // better to stop than to deploy blind.
                     def liveSha = sh(
-                        script: "ssh $EDGE \"sha256sum $JHOME/plugins/devcru-mfa.jpi\" | cut -d' ' -f1",
+                        script: "ssh $SSHOPTS $EDGE \"sha256sum $JHOME/plugins/devcru-mfa.jpi\" | cut -d' ' -f1",
                         returnStdout: true).trim()
                     env.NEW_SHA = newSha
                     env.DEPLOY_NEEDED = (newSha == liveSha) ? 'no' : 'yes'
@@ -90,17 +99,17 @@ pipeline {
                 // controller. Never snapshot-with-Jenkins-stopped is NOT the
                 // rule we break willingly; it is the only rung we have.
                 sh '''
-                    export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"
+                    export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH"
                     mkdir -p "$SNAPDIR"
                     TS=$(date +%Y%m%d-%H%M%S)
                     OUT="$SNAPDIR/jenkins-snapshot-$TS.tar.gz"
                     set -o pipefail
-                    ssh "$EDGE" "tar cf - -C $JHOME --exclude=war/work --exclude=workspace . 2>/tmp/pipe-snapshot-err.log" \\
+                    ssh $SSHOPTS "$EDGE" "tar cf - -C $JHOME --exclude=war/work --exclude=workspace . 2>/tmp/pipe-snapshot-err.log" \\
                       | pigz -p 8 > "$OUT"
                     sha256sum "$OUT" > "$OUT.sha256"
                     echo "snapshot: $OUT"
                     cat "$OUT.sha256"
-                    ssh "$EDGE" "cat /tmp/pipe-snapshot-err.log | grep -v '.docker\\|.java/fonts' | head -5 || true"
+                    ssh $SSHOPTS "$EDGE" "cat /tmp/pipe-snapshot-err.log | grep -v '.docker\\|.java/fonts' | head -5 || true"
                     # Retention: keep latest 2 snapshots.
                     ls -1t "$SNAPDIR"/jenkins-snapshot-*.tar.gz | tail -n +3 | while read -r old; do
                         rm -f "$old" "$old.sha256"
@@ -115,14 +124,14 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'jenkins-rally-api-token', variable: 'JK_TOKEN')]) {
                     sh '''
-                        export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"
+                        export PATH="/usr/lib/jvm/java-21-openjdk-amd64/bin:$PATH"
                         CLI="java -jar $CLIJAR -s $CONTROLLER -auth rally:$JK_TOKEN -http"
                         # RestartRequiredException (exit 1) is EXPECTED when
                         # re-installing a loaded plugin — the file still gets
                         # swapped on disk, which is the part we verify next.
                         $CLI install-plugin = -deploy < target/devcru-mfa.hpi || true
                         sleep 3
-                        LIVE_AFTER=$(ssh "$EDGE" "sha256sum $JHOME/plugins/devcru-mfa.jpi" | cut -d' ' -f1)
+                        LIVE_AFTER=$(ssh $SSHOPTS "$EDGE" "sha256sum $JHOME/plugins/devcru-mfa.jpi" | cut -d' ' -f1)
                         if [ "$LIVE_AFTER" != "$NEW_SHA" ]; then
                             echo "FATAL: live .jpi sha ($LIVE_AFTER) != artifact sha ($NEW_SHA) after install — NOT restarting."
                             exit 1
