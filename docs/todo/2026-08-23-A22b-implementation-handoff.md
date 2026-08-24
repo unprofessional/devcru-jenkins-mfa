@@ -4,8 +4,10 @@
 > `MfaAdminIndexThemeTest` pin + browser proof). Both merged to `develop` as
 > PR #20 (`26c1e7d`) and **DEPLOYED to production `jenkins.devcru.org`
 > 2026-08-24 ~01:10 ET** (smoke green; deploy record in Moldy's memory, not
-> here). **Next: §1-D — the production feedback round from mads's live walk.
-> §1-C (A24) stays last** — separate spec-first PR awaiting mads's rulings.
+> here). **TOP PRIORITY: §1-PIPELINE — get the self-deploy pipeline green
+> (mads's call 2026-08-24 ~03:00 ET; Moldy diagnosed + pre-fixed, you verify
+> and iterate). THEN §1-D — the production feedback round from mads's live
+> walk. §1-C (A24) stays last** — separate spec-first PR awaiting mads's rulings.
 
 Written for Sebastian (next session). **A22-b is APPROVED and is being merged
 to `develop` by mads.** This handoff now hands you the POST-MERGE next steps
@@ -55,7 +57,128 @@ light theme yet. That is task §1-B below. Do not repeat the overclaim.
 
 ## 1. NEXT TASKS (post-merge, branch from `develop`)
 
-Do these in order. Each is its own commit; no PR without mads.
+Order: **§1-PIPELINE first (before all cleanup)**, then §1-D, then §1-C.
+Each task is its own commit; no PR without mads.
+
+### §1-PIPELINE — TOP PRIORITY — self-deploy pipeline: verify + iterate to green (before §1-D)
+
+**Why you:** mads's call (2026-08-24 ~03:00 ET) — this is a back-and-forth
+troubleshooting job. Moldy did the diagnosis and applied the fixes; you own
+verification and any remaining iteration until the pipeline is green.
+
+**What it is:** the root `Jenkinsfile` — merges to `master` build + deploy the
+`devcru-mfa` plugin to the very Jenkins instance that runs the job. Job:
+`devcru-jenkins-mfa` on `http://192.168.7.35:8080` (LAN) /
+`https://jenkins.devcru.org`. Pipeline-from-SCM, branch `master`,
+scriptPath `Jenkinsfile`, GitHub hook trigger, **lightweight checkout OFF**
+(do not re-enable — build #1 died because of it). Credential
+`jenkins-rally-api-token` (secret text, rally's API token) already exists in
+the Jenkins credentials store. Agent: label `yharnam` — runs as user
+`jenkins` (uid 996, workDir `/home/jenkins/agent`), NOT as hunter;
+`/home/hunter` is 750 and unreachable from CI.
+
+**Build history — all four failures root-caused. Do not re-diagnose:**
+
+1. **#1** `Unable to find Jenkinsfile from git` — lightweight checkout was ON
+   (fetches only the Jenkinsfile via GitHub API; fails, and wrong shape here
+   anyway since Verify needs the full repo). Fixed: lightweight=false in job
+   config (Moldy applied via API; original config backed up on yharnam).
+2. **#2** `mvn: not found` — isolated `jenkins` agent user vs hunter-owned
+   toolchain. Fixed: toolchain provisioned into world-readable locations
+   (see environment list below).
+3. **#3** `curl` exit 23 writing `/tmp/jenkins-cli.jar` — the file already
+   existed, owned by hunter from earlier manual ops; sticky /tmp does not let
+   the jenkins user overwrite it. Fixed: `CLIJAR` is workspace-local now.
+4. **#4** `Fatal error compiling: error: release version 17 not supported` —
+   the system `/usr/lib/jvm/java-21-openjdk-amd64` is
+   **`openjdk-21-jre-headless`: no `bin/javac`, no `lib/ct.sym`**. Its
+   embedded `jdk.compiler` rejects `--release` for EVERY value — proven
+   outside Maven by calling `JavacTool` directly with releases 8/11/17/21:
+   all throw `IllegalArgumentException` from
+   `com.sun.tools.javac.main.Arguments.handleReleaseOptions`. (Single-file
+   source launch still works — it doesn't use `--release` — which is why the
+   JRE looks healthier than it is.) The hpi plugin compiles with
+   `maven.compiler.release=17`, so no JRE can ever build this repo. Fixed:
+   hunter's Temurin `jdk-21.0.12+8` (real javac + 10.7MB ct.sym) copied
+   world-readable to `/opt/jdk-21.0.12+8`; Jenkinsfile sets `JAVA_HOME` +
+   PATHs (develop commit `4113c60`).
+
+**Provisioned CI environment (all verified working as user `jenkins`):**
+
+- `/opt/jdk-21.0.12+8` — Temurin JDK, world-readable; `JAVA_HOME`
+- `/opt/apache-maven-3.9.11` — world-readable copy of hunter's Maven
+- `/home/jenkins/.m2/repository` — offline repo seeded from hunter's (362MB)
+- `/home/jenkins/.ssh/id_ed25519` — deploy key; pubkey trusted in
+  ranger@192.168.7.35 `authorized_keys` (ssh round-trip verified)
+- `/home/jenkins/backups/jenkins-snapshots` — pre-deploy snapshot dir
+  (keep-latest-2 + sha256 sidecars)
+- Repro clone left at `/home/jenkins/repro-mfa` (master): `sudo -u jenkins`
+  `mvn -o -B clean verify` there = BUILD SUCCESS 1:55, SpotBugs 0, as user
+  jenkins. Delete it once the pipeline is green.
+
+**Your iteration loop:**
+
+- You cannot merge `develop` → `master` yourself (mads-approved-per-step).
+  Fix → commit to develop → ask mads to merge → the webhook fires the next
+  build automatically. Do not trigger manual builds as a substitute — the
+  merge IS the trigger under test.
+- Watch consoles: `http://192.168.7.35:8080/job/devcru-jenkins-mfa/<N>/console`
+  — auth `rally` + API key from Infisical `agent-infra` (secret
+  `JENKINS_API_KEY`; universal-auth bootstrap per your own notes; pattern
+  `curl -s -u "rally:$KEY" <url>`).
+- Repro build-stage issues locally: `sudo -u jenkins` with
+  `JAVA_HOME=/opt/jdk-21.0.12+8` and PATH
+  `/opt/jdk-21.0.12+8/bin:/opt/apache-maven-3.9.11/bin`. Sudo password:
+  Infisical `agent-infra` → `SHINRALABS_SUDO_PASSWORD` (one LAN password,
+  works on yharnam too); pattern `echo "$PW" | sudo -S -p '' <cmd>` — the
+  timestamp cache does NOT reliably carry between shells, pipe the password
+  per sudo call, and gate on password length before piping (the Infisical
+  pull transiently returns empty).
+
+**Design invariants — do not change without mads:**
+
+- Immediate `restart` + Pipeline durability resume, NOT `safeRestart`
+  (safeRestart waits for all builds including its own — deadlock; mads chose
+  option B explicitly).
+- sha-compare gate: identical artifact bits vs live `.jpi` → deploy SKIPPED.
+  Note: hpi builds are NOT bit-reproducible (manifest timestamps) — a fresh
+  build of the exact deployed commit produced a different sha
+  (`085243d5…` vs live `34c51487…`), so expect the FULL deploy path on every
+  code-identical merge for now. If that churn becomes annoying, the fix is a
+  stable identity stamp (e.g. git sha in the manifest), not weakening the
+  gate — discuss with mads first.
+- Rung-3 restore (snapshot) is deliberately MANUAL. If a deploy breaks
+  Jenkins, the pipeline is not the recovery tool. Ladder: rung 1
+  `DEVCRU_MFA_OFF=1` on the controller; rung 2 uninstall plugin + restart;
+  rung 3 restore the latest snapshot from
+  `/home/jenkins/backups/jenkins-snapshots` — escalate rung 3 to mads+Moldy.
+- Never self-update plugins the pipeline itself depends on (workflow-*, git,
+  durable-task, github). `devcru-mfa` is safe: no pipeline step consumes it.
+
+**The untested leg:** restart→resume durability. The first run with the JDK
+fix is expected to take the FULL deploy path (bits differ, see above) — it
+will restart the controller mid-build and must resume afterwards and run
+Wait-for-ready + Smoke. If it does not resume, THAT is the defect to solve
+next; capture the build's stage view + controller boot log around the
+restart timestamp before changing anything.
+
+**Definition of done:** one end-to-end green run fired by a real
+`develop`→`master` merge — either path counts (skip+smoke, or full
+deploy+resume+smoke), but only the full path proves the durability leg; say
+which one you got. Report: build number, path taken, smoke output.
+
+**SECURITY — mads's explicit instruction, read twice:**
+
+- **Never leak secrets or sensitive information in your narrations, status
+  updates, commits, or build consoles.** That means: rally's API token,
+  Infisical secrets/credentials, the sudo password, ssh private keys,
+  cookies/session material. Reference by NAME only, never print values.
+- The Jenkins build console is visible to anyone with Jenkins access —
+  never add a `sh` step that prints env, credentials, or command lines
+  containing them. All credential access stays inside `withCredentials`
+  (which masks) — keep it that way.
+- Same rule for Discord reports and memory/handoff notes: names and
+  locations, not values.
 
 ### §1-A — Cleanup from this PR (do this first) — ~~open~~ DONE 2026-08-23 (branch `a22b-1a-cleanup`)
 
@@ -136,7 +259,7 @@ value was actually applied.
 
 §1-C (A24) deliberately untouched, pending its own spec-first PR.
 
-### §1-D — Production feedback round (mads's live walk, 2026-08-24) — DO THIS NEXT
+### §1-D — Production feedback round (mads's live walk, 2026-08-24) — after §1-PIPELINE
 
 mads walked the deployed surface in a real browser (log in → MFA →
 `/manage/configureSecurity/` → the "Open" link → `/mfaAdmin/`). Two defects,
@@ -182,6 +305,18 @@ plugin's 403 denial arm — probe the denial arm with an authenticated
 non-admin. The roster is enrolled-only: a fresh test user does not appear on
 it until they enrol a TOTP from their own Security page (fresh/unenrolled
 users pass the gate, so creating one carries no lockout risk).
+
+**D3 — `doFillPolicyItems` missing: configureSecurity spams the controller log.**
+Live controller log (post-A22-b deploy, 2026-08-24) repeatedly shows:
+`Caught exception evaluating: descriptor.calcFillSettings(field,attrs) in
+/manage/configureSecurity/. Reason: java.lang.IllegalStateException: class
+org.sebcru.mfa.DevcruMfaConfig doesn't have the doFillPolicyItems method for
+filling a drop-down list` (stack runs through `MfaFilter.passUnlessGated` →
+`doFilter` → `BearerTokenFilter.doFilter`). Something in the plugin's config
+jelly declares a drop-down whose `doFill...` method does not exist on
+`DevcruMfaConfig`. Find the jelly field, add the fill method (or drop the
+drop-down if the field shouldn't offer choices), pin it with a test, and
+confirm the exception stops after the next deploy.
 
 **Discipline for this round:** real-browser acceptance ON
 `qwen3.8:27b-mtp-q8_0` — state the model in your report (Correction 1);
