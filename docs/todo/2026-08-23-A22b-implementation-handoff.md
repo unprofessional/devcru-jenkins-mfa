@@ -1,10 +1,11 @@
-# A22-b admin factor-management — handoff (v4, 2026-08-23, NEXT TASKS)
+# A22-b admin factor-management — handoff (v5, 2026-08-24, PRODUCTION FEEDBACK ROUND)
 
-> **§1 progress (2026-08-23):** §1-A DONE (commit `14dc5d2`) and §1-B DONE
-> (theming fix + `MfaAdminIndexThemeTest` pin + browser proof, this commit)
-> both on branch `a22b-1a-cleanup`. **§1-C (A24) is NOT started** — it is a
-> separate spec-first PR awaiting mads's rulings. Nothing below §1-C has been
-> touched.
+> **§1 progress:** §1-A DONE (`14dc5d2`), §1-B DONE (`e5e68da`, theming fix +
+> `MfaAdminIndexThemeTest` pin + browser proof). Both merged to `develop` as
+> PR #20 (`26c1e7d`) and **DEPLOYED to production `jenkins.devcru.org`
+> 2026-08-24 ~01:10 ET** (smoke green; deploy record in Moldy's memory, not
+> here). **Next: §1-D — the production feedback round from mads's live walk.
+> §1-C (A24) stays last** — separate spec-first PR awaiting mads's rulings.
 
 Written for Sebastian (next session). **A22-b is APPROVED and is being merged
 to `develop` by mads.** This handoff now hands you the POST-MERGE next steps
@@ -27,10 +28,12 @@ JDK for javap: `export PATH="$HOME/opt/jdk-21.0.12+8/bin:$PATH"`.
 ## 0. Status + one correction you must internalize
 
 **Status:** A22-b (admin roster + `clearFactors`/`revokeTrust`, the restart-
-survival leg, the context-safe script-URL fix) is green, reviewed, APPROVED.
-MERGED 2026-08-23 as PR #18 (`a22b-spec` → `develop`, merge commit `63e5b81`).
-All next work branches from `develop` AFTER the merge (new branch, not
-`a22b-spec`).
+survival leg, the context-safe script-URL fix, the dual-theme fix) is green,
+reviewed, APPROVED. MERGED 2026-08-24 as PR #20 (`a22b-1a-cleanup` →
+`develop`, merge commit `26c1e7d`) and **DEPLOYED live to `jenkins.devcru.org`
+(LAN-only, `http://192.168.7.35:8080`)** with a pre-deploy off-host snapshot.
+mads then walked the live surface and filed the feedback round in §1-D. All
+next work branches from `develop` (new branch).
 
 **Correction 1 — model attribution (read this).** The real-browser acceptance
 walk in this PR did NOT all run on you (qwen3.8:27b). Hermes logs show the
@@ -133,7 +136,62 @@ value was actually applied.
 
 §1-C (A24) deliberately untouched, pending its own spec-first PR.
 
-### §1-C — A24: the third verb — force-enrol + first-time MFA setup UI
+### §1-D — Production feedback round (mads's live walk, 2026-08-24) — DO THIS NEXT
+
+mads walked the deployed surface in a real browser (log in → MFA →
+`/manage/configureSecurity/` → the "Open" link → `/mfaAdmin/`). Two defects,
+one settled design ruling. Branch from `develop`; one commit per task.
+
+**D1 — `config.properties` lost a newline (the title renders as a literal key).**
+On `/manage/configureSecurity/` the section title shows the raw key
+`manageFactorsLink` instead of "Factor recovery (locked-out users)".
+Root cause (verified with `cat -A`): in
+`src/main/resources/org/sebcru/mfa/DevcruMfaConfig/config.properties` the
+`manageFactorsLink=...` entry is GLUED to the tail of the `rememberFor.hint`
+line — the newline between them is missing. Consequences: (a) the key does not
+exist, so `${%manageFactorsLink}` falls through to the raw key name; (b) the
+"remember trusted browsers" hint value carries the glued garbage at its end.
+Fix: restore the newline (verify with `cat -A`, not eyeballs — this smells
+like a fuzzy-patch mangle, the §7 pitfall). Pin it honestly: a test that
+parses the properties file and asserts `manageFactorsLink` exists as a
+standalone key with the expected value (the i18n lookup is the external
+consumer — pin against it, postmortem rule 10).
+
+**D2 — the admin page is an isolated island: add a back link.**
+The roster page has no cancel/back affordance — once you're there you're
+stranded. Add a back link in `MfaAdminController/index.jelly` (e.g. "←
+Security configuration" targeting `<root>/manage/configureSecurity`, or a
+Manage Jenkins breadcrumb). It must be styled in BOTH themes (light block
+included — no inherited-colour bets, postmortem rule 12) and present on both
+rendered arms (roster + 403 denial). Acceptance: real-browser render, both
+schemes, link navigates.
+
+**Settled ruling — do not re-litigate:** mads asked whether the roster could
+be inlined into `/manage/configureSecurity/`. Answer: NO. `configureSecurity`
+is a single-submit configuration form; the roster is a mutation surface with
+its own POST endpoints, crumb, typed-confirmation dialog, and CSP-clean JS.
+Inlining it mixes form-submit semantics and drags interactive JS into core's
+security page. Jenkins convention agrees: action surfaces get their own page
+(script console, user management); config pages get settings. The island
+feeling is fixed by D2's back link, not by a transplant.
+
+**Facts for this round (live-verified):** the section renders on
+`/manage/configureSecurity/` (NOT `/configure`). Anonymous visitors to
+`/mfaAdmin/` get core's "Authentication required" login redirect, NOT the
+plugin's 403 denial arm — probe the denial arm with an authenticated
+non-admin. The roster is enrolled-only: a fresh test user does not appear on
+it until they enrol a TOTP from their own Security page (fresh/unenrolled
+users pass the gate, so creating one carries no lockout risk).
+
+**Discipline for this round:** real-browser acceptance ON
+`qwen3.8:27b-mtp-q8_0` — state the model in your report (Correction 1);
+`mvn clean verify -o` green; BDD docs + same-commit README/docs rule. You do
+NOT deploy — get the branch green and let mads/Moldy run the cutover (deploy
+shape: local clean-verify `.hpi` → off-host snapshot → jenkins-cli `-http`
+stdin `install-plugin = -deploy` → expect `RestartRequiredException` →
+`safe-restart`).
+
+### §1-C — A24: the third verb — force-enrol + first-time MFA setup UI (after §1-D)
 
 The next feature (Ruling 4's "for now" companion; tracked in TECH_DEBT "Not in
 the code yet"): when an admin enforces MFA fleet-wide, the enrolled-only roster
@@ -219,4 +277,4 @@ Run logs under `/tmp/a22b-*.log`. **Stale-data warning:** surefire reports under
   real-browser (or otherwise model-sensitive) work, confirm the active model is
   qwen3.8:27b and state it in your report. Use `/model <name> --session` if a
   session-only change is ever needed.
-- This handoff (v4) supersedes v1–v3 where they conflict.
+- This handoff (v5) supersedes v1–v4 where they conflict.
