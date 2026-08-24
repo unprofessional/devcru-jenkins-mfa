@@ -44,7 +44,10 @@ pipeline {
         SSHOPTS    = '-o StrictHostKeyChecking=accept-new -o BatchMode=yes'
         JHOME      = '/var/lib/jenkins'
         SNAPDIR    = '/home/jenkins/backups/jenkins-snapshots'
-        CLIJAR     = '/tmp/jenkins-cli.jar'
+        // Workspace-local, NOT shared /tmp: /tmp/jenkins-cli.jar can exist
+        // hunter-owned from manual ops and a 1777 /tmp still won't let the
+        // jenkins user overwrite it (curl exit 23, build #3).
+        CLIJAR     = 'jenkins-cli.jar'
     }
 
     stages {
