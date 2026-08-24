@@ -54,12 +54,17 @@ the MFA page before they can reach the roster (the admin surface is
 deliberately NOT on the gate's allow-list, so the mutation endpoints are
 unreachable pre-verify at every layer). Both operations write a single
 loud audit line to the log. The complete recovery was walked in real Chromium
-under a non-root Jenkins context: the admin verified TOTP, opened the roster in
-both colour schemes, typed the target id, cleared the account, and the target
+under a non-root Jenkins context: the admin verified TOTP, opened the roster,
+typed the target id, cleared the account, and the target
 logged in password-only and re-enrolled a fresh TOTP factor; after a Jenkins
-restart both factors and the least-privilege refusal were re-proven. The static
-action script is context-rooted, so the buttons also work when Jenkins is served
-beneath a prefix such as `/jenkins`. The spec and rulings:
+restart both factors and the least-privilege refusal were re-proven. The
+admin page **follows your browser's colour setting like Jenkins' own
+pages** — light-preferring browsers get a light roster and light 403 page,
+dark-preferring browsers get the dark ones, and the two renders are
+genuinely different (the page previously claimed both schemes but always
+painted the dark one — corrected in A22-b §1-B, 2026-08-23). The static
+action script is context-rooted, so the buttons also work when Jenkins is
+served beneath a prefix such as `/jenkins`. The spec and rulings:
 [`docs/todo/2026-08-23-A22b-admin-factor-management-spec.md`](docs/todo/2026-08-23-A22b-admin-factor-management-spec.md).
 
 What follows documents the built system as it landed through Task 8.
