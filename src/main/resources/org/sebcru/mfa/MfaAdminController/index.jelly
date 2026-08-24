@@ -5,8 +5,17 @@
   verification page (index.jelly next door): no l:layout wrapper, so it
   must declare its own Content-Type (postmortem round 3), nosniff
   (round 2/3), ship its JS as a STATIC file (round 2 CSP rule — no inline
-  scripts), and declare every element of the dark-theme button palette
-  explicitly (round 7 white-on-white ghost buttons).
+  scripts), and declare every element of the button palette explicitly —
+  in BOTH schemes (round 7 white-on-white ghost buttons).
+
+  Theming (§1-B, 2026-08-23): the page claims `color-scheme: light dark`
+  and now honours it — the base rules are the dark theme and the
+  `@media (prefers-color-scheme: light)` block re-paints every surface,
+  so light and dark renders are genuinely different documents. Before
+  the fix the light render was byte-identical to the dark one (the
+  A22-b "both themes" screenshots shared an md5); MfaAdminIndexThemeTest
+  pins the per-surface light declarations. The 403 denial arm carries its
+  own light rules too, so the denial page is not a dark hole in a light UI.
 
   The view is deliberately DUMB: the controller's getRosterRows() is the
   render model (ruling 4: enrolled-only for now; A24's force-enrolment
@@ -42,13 +51,36 @@
           <meta charset="utf-8"/>
           <meta name="robots" content="noindex,nofollow"/>
           <title>403 Forbidden — MFA administration</title>
+          <!-- §1-B (2026-08-23): the denial page is a surface of this face,
+               so it follows the user's colour-scheme like the roster — no
+               permanent dark sheet inside a light UI. -->
+          <style>
+            html, body { margin: 0; }
+            body {
+              min-height: 100vh;
+              display: flex; align-items: center; justify-content: center;
+              background: #101418;
+              color: #e8eaed;
+              font-family: sans-serif;
+            }
+            h1 { font-size: 18px; margin: 0 0 8px 0; }
+            p { font-size: 14px; color: #9aa4ae; margin: 0; }
+            code { font-family: monospace; }
+            @media (prefers-color-scheme: light) {
+              body {
+                background: #ffffff;
+                color: #1f2328;
+              }
+              p { color: #767676; }
+            }
+          </style>
         </head>
-        <body style="background:#101418;color:#e8eaed;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0">
+        <body>
           <div>
-            <h1 style="font-size:18px;margin:0 0 8px 0">403 — MFA administration</h1>
-            <p style="font-size:14px;color:#9aa4ae;margin:0">
+            <h1>403 — MFA administration</h1>
+            <p>
               You do not have permission to view this page
-              (<span style="font-family:monospace">admin_permission_required</span>).
+              (<code>admin_permission_required</code>).
             </p>
           </div>
         </body>
@@ -200,6 +232,63 @@
         .result-ok { background: #1f3a2d; color: #6fd39a; border: 1px solid #2c5a43; }
         .result-err { background: #3a1f1f; color: #e88; border: 1px solid #5a2c2c; }
         noscript { color: #e88; font-size: 13px; display: block; margin-top: 12px; }
+
+        /* ============ LIGHT THEME (§1-B, 2026-08-23) ============
+           The base rules above are the DARK theme. This block re-paints
+           EVERY painted surface for light-preferring browsers, following
+           the house light palette already established in the self-service
+           MFA section (MfaUserProperty/config.jelly: #1f2328 text,
+           #f8f9fa buttons, #d0d7de borders, #2f7d32 success, #b3261e
+           error). Before this block existed, the page declared
+           `color-scheme: light dark` but rendered byte-identically dark
+           under a light preference — the A22-b "both themes" screenshots
+           03/04 shared one md5. MfaAdminIndexThemeTest pins these
+           declarations surface by surface. */
+        @media (prefers-color-scheme: light) {
+          body {
+            background: #ffffff;
+            color: #1f2328;
+          }
+          .card {
+            background: #ffffff;
+            border: 1px solid #d0d7de;
+          }
+          h1 { color: #1f2328; }
+          .sub { color: #767676; }
+          th { color: #767676; border-bottom: 1px solid #d0d7de; }
+          td { border-bottom: 1px solid #eaeef2; }
+          .none { color: #8c959f; }
+          .factor-totp { background: #e6f4ea; color: #1e7e34; border: 1px solid #a8d5b5; }
+          .factor-email { background: #e7f0fa; color: #1a5dab; border: 1px solid #a3c2e0; }
+          .btn {
+            border: 1px solid #d0d7de;
+            background: #f8f9fa;
+            color: #1f2328;
+          }
+          .btn:hover { background: #eef1f4; }
+          .btn-danger {
+            border: 1px solid #f3b0ad;
+            background: #fde9e8;
+            color: #b3261e;
+          }
+          .btn-danger:hover { background: #fbdbd9; color: #8c1d18; }
+          .veil { background: rgba(15, 23, 42, 0.32); }
+          .dialog {
+            background: #ffffff;
+            border: 1px solid #d0d7de;
+          }
+          .dialog h2 { color: #7e1e1b; }
+          .dialog p { color: #767676; }
+          .dialog .target { color: #1f2328; }
+          .dialog input {
+            border: 1px solid #d0d7de;
+            background: #ffffff;
+            color: #1f2328;
+          }
+          .result-ok { background: #e6f4ea; color: #1e7e34; border: 1px solid #a8d5b5; }
+          .result-err { background: #fde9e8; color: #b3261e; border: 1px solid #f3b0ad; }
+          noscript { color: #b3261e; }
+        }
       </style>
     </head>
     <body>
