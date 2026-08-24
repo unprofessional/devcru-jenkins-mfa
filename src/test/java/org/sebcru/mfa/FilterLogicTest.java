@@ -230,6 +230,11 @@ class FilterLogicTest {
         "/mfa", "/images/logo.png",
         "/static/2.528/js/core.js", "/scripts/something.js", "/css/theme.css",
         "/adjuncts/123/xyz", "/logout",
+        // The MFA page's own endpoints still pass the (segment-precise) /mfa
+        // entry — only the /mfaAdmin sibling is carved out (A22-b). Without
+        // these the segment-precise rule above could silently break the page's
+        // own postVerify/postEnroll/etc., which must stay reachable pre-verify.
+        "/mfa/postVerify", "/mfa/postEnroll",
         // Live incident round 4: the gate's own JS rides /plugin/devcru-mfa/;
         // gating it 302s the script to the gate page (text/html) and Chrome
         // refuses to execute it — the Verify button is dead, self-lockout.
@@ -256,6 +261,72 @@ class FilterLogicTest {
             MfaFilter.decision(Policy.REQUIRED,
                 false, false, false, false, false, path, false),
             "expected REDIRECT for protected path: " + path);
+      }
+    }
+
+    /**
+     * WHAT: the A22-b gate carve-out — the segment-precise {@code /mfa}
+     * allow-list entry must NOT sweep the admin surface ({@code /mfaAdmin})
+     * through step 5. This is the second instance of the A23 sibling-sweep
+     * class (an allow-listed prefix silently passing a sibling path to
+     * factor-destroying mutations without the normal decision chain).
+     *
+     * <p>BDD:
+     * <pre>
+     * GIVEN policy = REQUIRED, an enrolled non-exempt, unverified, untrusted
+     *       user (everything else worst-case-for-passing)
+     * WHEN  the request path is /mfaAdmin          (the admin page itself)
+     * THEN  REDIRECT — the page is gated; the bare /mfa prefix must not match
+     * WHEN  the request path is /mfaAdmin/clearFactors (a mutation endpoint)
+     * THEN  REDIRECT — this is the A23-analogue at the WIRE: an unverified
+     *       session must be bounced OFF the mutation, not handed to it, purely
+     *       from the gate (independent of the controller's own 403 seam)
+     * WHEN  the request path is /mfaAdmin?x=y      (page, with a query string)
+     * THEN  REDIRECT (query on the admin segment is still denied)
+     * WHEN  the request path is /mfa               (the MFA page, BARE)
+     * THEN  PASS — the page the gate bounces to must stay reachable
+     * WHEN  the request path is /mfa?redirect=/job/web/ (page + the canonical
+     *       A5 redirect carrier)
+     * THEN  PASS — the ?redirect= query shape on the bare page must not be
+     *                   broken by the segment-precise rule
+     * WHEN  the request path is /mfa/postVerify    (a sibling endpoint)
+     * THEN  PASS — the page's own pre-verify endpoints must still pass step 5
+     * </pre>
+     *
+     * <p>WHY/SOLVES: the original bug was that {@code "/mfaAdmin/clearFactors".
+     * startsWith("/mfa")} is true, so the allow-list handed a factor-clearing
+     * mutation to exactly the password-only attacker the gate stands to stop.
+     * The fix must redirect the admin segment in ALL its shapes (bare, with
+     * query, with sub-path) while leaving the MFA page's own bare form, its
+     * {@code ?redirect=} query, and its {@code /mfa/} endpoints passing —
+     * pinning those PASSes too is what keeps the fix from over-tightening
+     * and re-locking the page the gate depends on. The controller's 403 seam
+     * is the authoritative mutation control; this is the reachability control
+     * at the gate, and the two agreeing (REDIRECT here AND 403 there) is the
+     * spec's "not on the allow-list, decision chain unchanged" invariant.
+     */
+    @Test
+    void mfaAdminIsNotSweptByTheMfaPrefixAndTheMfaPageStillPasses() {
+      // Admin segment in every reachable shape: REDIRECT.
+      for (String path : new String[]{"/mfaAdmin",
+          "/mfaAdmin/clearFactors",
+          "/mfaAdmin/revokeTrust",
+          "/mfaAdmin?x=y"}) {
+        assertEquals(MfaFilterDecision.REDIRECT,
+            MfaFilter.decision(Policy.REQUIRED,
+                false, false, false, false, false, path, false),
+            "expected REDIRECT for the admin surface: " + path);
+      }
+      // The MFA page itself (bare /mfa) and its own endpoints: PASS, so the
+      // carve-out did not break the page the gate bounces users to.
+      for (String path : new String[]{"/mfa",
+          "/mfa?redirect=/job/web/",
+          "/mfa/postVerify",
+          "/mfa/postEnroll"}) {
+        assertEquals(MfaFilterDecision.PASS,
+            MfaFilter.decision(Policy.REQUIRED,
+                false, false, false, false, false, path, false),
+            "expected PASS for the MFA page's own resource: " + path);
       }
     }
 
