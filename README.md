@@ -57,7 +57,23 @@ loud audit line to the log. The complete recovery was walked in real Chromium
 under a non-root Jenkins context: the admin verified TOTP, opened the roster,
 typed the target id, cleared the account, and the target
 logged in password-only and re-enrolled a fresh TOTP factor; after a Jenkins
-restart both factors and the least-privilege refusal were re-proven. The
+restart both factors and the least-privilege refusal were re-proven.
+
+**Force enrol + first-time setup (A24, landed 2026-08-25):** under policy
+`REQUIRED` the admin page now shows three explicit rollout views —
+**Enrolled** (recovery verbs), **Setup pending**, and **Not enrolled** (the
+complement worklist; hidden when policy is `OFF`) — each with counts,
+per-row factor indicators, account state (active/disabled/unknown, never
+guessed), and blank mailboxes rendered as "(no mailbox)". Each not-enrolled
+row carries a mailbox field and a **Force enrol** verb: it writes an EMAIL
+factor from the entered address plus a non-secret setup marker — never a
+secret, never trust, never a verified session. The target's next login is
+bounced to a first-time **setup variant** of the MFA page that walks them
+through verifying a code mailed to that mailbox; nothing is verified until
+THEY prove it, an admin action can never read as verification, and a
+corrected mailbox invalidates any old-address code. Repeating the same
+mailbox is idempotent; disabled or exempt accounts refuse force-enrol;
+`Clear factors` remains the per-user rollback. The
 admin page **follows your browser's colour setting like Jenkins' own
 pages** — light-preferring browsers get a light roster and light 403 page,
 dark-preferring browsers get the dark ones, and the two renders are
