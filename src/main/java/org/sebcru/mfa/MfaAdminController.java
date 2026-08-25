@@ -191,9 +191,276 @@ public final class MfaAdminController implements RootAction {
     p.setCodeIssuedAt(0L);
     p.setLastResendAt(0L);
     p.setFailedAttemptStreak(0);
+    // A24 / D8 rollback ruling: clearFactors also clears the forced-setup
+    // marker in the SAME save — the per-user off switch removes the
+    // obligation along with the factor it was provisioned with.
+    p.setForcedSetupPending(false);
   }
 
-  /** The current authenticated user's id, or "?" (the audit-line actor). */
+  /**
+   * A24 — the THIRD verb: enrol a named OTHER user into the EMAIL factor
+   * from an admin-supplied mailbox, marking their property
+   * {@code forcedSetupPending} so their next request is bounced to the
+   * first-time setup variant of {@code /mfa}.
+   *
+   * <h2>The load-bearing security line (spec §4.1)</h2>
+   * Force-enrol creates an OBLIGATION TO VERIFY; it can never create a proof
+   * of verification. It writes ONLY the registered mailbox and the non-secret
+   * marker — never any secret ({@code totpSecret}, {@code emailCodeSecret}),
+   * never trust ({@code trustedUntilMs}), never {@code lastVerifiedFactor},
+   * never any session attribute. Verification happens ONLY through the two
+   * existing self-service verify paths (postVerify/postResendEmail), so the
+   * admin's action is unreadable as "the admin vouched for this session".
+   *
+   * <h2>Authorization chain (identical order to the other verbs, §4.3)</h2>
+   * <pre>
+   *  1. actor present + ADMINISTER       (403 admin_permission_required)
+   *  2. adminManageAllowed seam          (403 admin_verification_required)
+   *  3. self-management forbidden        (200 admin_self_management_forbidden)
+   *  4. typed-id confirm matches target  (200 admin_confirm_required)
+   *  5. target exists (get-only lookup)  (200 user_not_found)
+   *  6. target-state decision (pure seam, NOT folded into the actor seam):
+   *     disabled → user_disabled; exempt → user_exempt;
+   *     ordinarily enrolled → already_enrolled;
+   *     pending + same mailbox → idempotent unchanged;
+   *     pending + other mailbox → audited pending-enrolment correction (D5);
+   *     not enrolled → enrol (mailbox + marker, one save).
+   *  7. mutate + persist honestly        (200 persistence_failed if save throws)
+   * </pre>
+   */
+  @RequirePOST
+  @WebMethod(name = "forceEnrol")
+  public void postForceEnrol(StaplerRequest2 req, StaplerResponse2 rsp)
+      throws IOException {
+    if (answerAdminDenied(req, rsp)) {
+      return;
+    }
+    String error = denyOrConfirmError(req);
+    if (error != null) {
+      writeJson(rsp, error, null);
+      return;
+    }
+    String userId = req.getParameter("userId");
+    // Non-creating lookup (read plane stays get-only; §5 "cannot create a
+    // user record on lookup").
+    User target = User.getById(userId, false);
+    if (target == null) {
+      writeJson(rsp, VerifyOutcome.ERR_USER_NOT_FOUND, null);
+      return;
+    }
+    // D6: positively disabled users stay visible in the roster but cannot be
+    // force-enrolled (they cannot complete setup; enrolment would strand them).
+    if ("disabled".equals(accountStateOf(target))) {
+      writeJson(rsp, VerifyOutcome.ERR_USER_DISABLED, null);
+      return;
+    }
+    // D12: exempt users stay visible and labelled, but the force action is
+    // disabled — A24 governs interactive browser access, and says so honestly.
+    if (DevcruMfaConfig.currentSafe().isUserExempt(target.getId())) {
+      writeJson(rsp, VerifyOutcome.ERR_USER_EXEMPT, null);
+      return;
+    }
+    MfaUserProperty existing = target.getProperty(MfaUserProperty.class);
+    ForceEnrolDecision d = decideForceEnrol(existing, req.getParameter("email"));
+    if (d.error != null) {
+      writeJson(rsp, d.error, null);
+      return;
+    }
+    if (d.action == ForceEnrolAction.UNCHANGED) {
+      // D5 idempotence: same-address repeat short-circuits without a write,
+      // without a second audit line, and without minting anything.
+      writeJson(rsp, null, "forceEnrol");
+      return;
+    }
+    // The ONE sanctioned getOrCreate (spec §4.1): inside this single-writer
+    // endpoint, only now that every denial is behind us and a write is due.
+    MfaUserProperty p;
+    try {
+      p = MfaUserProperty.getOrCreate(target);
+    } catch (IOException e) {
+      writeJson(rsp, VerifyOutcome.ERR_SERVER, null);
+      return;
+    }
+    applyForceEnrol(p, d);
+    try {
+      target.save();
+    } catch (IOException e) {
+      LOGGER.log(Level.SEVERE, "MFA admin " + actorId()
+          + " force-enrolled user " + userId
+          + " but the save FAILED (in-memory only, lost on restart)"
+          + " — the target must NOT be treated as enrolled", e);
+      writeJson(rsp, VerifyOutcome.ERR_PERSISTENCE, null);
+      return;
+    }
+    if (d.action == ForceEnrolAction.CORRECT) {
+      LOGGER.log(Level.WARNING, "MFA admin " + actorId()
+          + " updated the force-enrol address for user " + userId);
+    } else {
+      LOGGER.log(Level.WARNING, "MFA admin " + actorId()
+          + " force-enrolled user " + userId + " (email factor)");
+    }
+    writeJson(rsp, null, "forceEnrol");
+  }
+
+  // ==================================================================
+  // A24 pure seams — the force-enrol TARGET-STATE decision and the
+  // rollout/account classification behind the roster views. Deliberately
+  // separate from the ACTOR-authorization seam above (spec §4.3: target
+  // state must not be folded into adminManageAllowed).
+  // ==================================================================
+
+  /** The three explicit rollout states of the A24 roster (spec §3). */
+  enum RolloutState { ENROLLED, SETUP_PENDING, NOT_ENROLLED }
+
+  /**
+   * Classify one user's rollout state. Setup pending CANNOT be miscounted as
+   * completed merely because the forced email makes {@code isMfaEnabled()}
+   * true — the marker outranks the factor presence (spec §7 unit criterion 2).
+   *
+   * <p>GIVEN a property (possibly null) WHEN classified THEN exactly one of:
+   * null / no live factor / no marker → NOT_ENROLLED; marker set →
+   * SETUP_PENDING; otherwise (live factor, no marker) → ENROLLED.
+   */
+  static RolloutState rolloutState(MfaUserProperty p) {
+    if (p == null || !p.isMfaEnabled()) {
+      return RolloutState.NOT_ENROLLED;
+    }
+    if (p.isForcedSetupPending()) {
+      return RolloutState.SETUP_PENDING;
+    }
+    return RolloutState.ENROLLED;
+  }
+
+  /**
+   * The account-state label (D6): "active" only when a resolvable realm
+   * signal POSITIVELY says enabled, "disabled" when it positively says
+   * disabled, "unknown" when it cannot be resolved — NEVER guessed active.
+   * One failed lookup degrades one row's label; it cannot 500 the roster.
+   * Pure seam over the resolved boolean so it is unit-pinned without a realm.
+   */
+  static String accountState(Boolean positivelyEnabled) {
+    if (positivelyEnabled == null) {
+      return "unknown";
+    }
+    return positivelyEnabled ? "active" : "disabled";
+  }
+
+  /** Glue: resolve the realm signal for one row, degrading to unknown. */
+  static String accountStateOf(User u) {
+    hudson.security.HudsonPrivateSecurityRealm.Details details =
+        u.getProperty(hudson.security.HudsonPrivateSecurityRealm.Details.class);
+    if (details == null) {
+      return accountState(null);
+    }
+    try {
+      return accountState(details.isEnabled());
+    } catch (RuntimeException e) {
+      return accountState(null);
+    }
+  }
+
+  /**
+   * A24 endpoint-contract mailbox validation: a non-blank, syntactically
+   * plausible address (local@domain.tld). Blank is refused by the CALLER'S
+   * decision below (it would silently un-enrol via the property setter).
+   * Ownership is proved only when the target verifies a code delivered there.
+   */
+  static boolean isValidEmail(String email) {
+    return email != null && email.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+");
+  }
+
+  /** The four outcomes of the force-enrol target-state decision. */
+  enum ForceEnrolAction { DENY, UNCHANGED, CORRECT, ENROL }
+
+  /** The decided outcome: an action plus (on CORRECT/ENROL) the mailbox. */
+  static final class ForceEnrolDecision {
+    final ForceEnrolAction action;
+    final String error; // DENY only
+    final String email; // CORRECT / ENROL only, pre-normalized (trimmed)
+
+    private ForceEnrolDecision(ForceEnrolAction action, String error, String email) {
+      this.action = action;
+      this.error = error;
+      this.email = email;
+    }
+
+    static ForceEnrolDecision deny(String error) {
+      return new ForceEnrolDecision(ForceEnrolAction.DENY, error, null);
+    }
+    static final ForceEnrolDecision UNCHANGED_D =
+        new ForceEnrolDecision(ForceEnrolAction.UNCHANGED, null, null);
+  }
+
+  /** Stable reason for a syntactically unusable mailbox. */
+  public static final String ERR_INVALID_EMAIL = VerifyOutcome.ERR_INVALID_EMAIL;
+
+  /**
+   * Decide what {@code POST /mfaAdmin/forceEnrol} must do for a target whose
+   * property may be ABSENT (null — most never-enrolled users carry none).
+   * PURE: decides only, never writes; {@link #applyForceEnrol} performs the
+   * write AFTER the caller has passed every denial and obtained the property
+   * (deny-before-mutation, the surface's whole discipline).
+   *
+   * <p>GIVEN a (nullable) property and a submitted mailbox WHEN decided THEN:
+   * <ul>
+   *   <li>blank/malformed mailbox → DENY {@code invalid_email} (blank would
+   *       silently un-enrol — clearFactors' single-writer job, not ours);</li>
+   *   <li>live factor, NO marker (ordinary enrolment) → DENY
+   *       {@code already_enrolled};</li>
+   *   <li>marker set + same mailbox (case-insensitive) → UNCHANGED (D5
+   *       idempotence — no second write, no second candidate);</li>
+   *   <li>marker set + DIFFERENT valid mailbox → CORRECT (D5: replace the
+   *       address, keep the marker, invalidate the old-address code state);</li>
+   *   <li>otherwise → ENROL.</li>
+   * </ul>
+   */
+  static ForceEnrolDecision decideForceEnrol(MfaUserProperty p, String submittedEmail) {
+    String mail = (submittedEmail == null) ? "" : submittedEmail.trim();
+    if (!isValidEmail(mail)) {
+      return ForceEnrolDecision.deny(VerifyOutcome.ERR_INVALID_EMAIL);
+    }
+    if (p != null && p.isMfaEnabled()) {
+      if (!p.isForcedSetupPending()) {
+        return ForceEnrolDecision.deny(VerifyOutcome.ERR_ALREADY_ENROLLED);
+      }
+      String current = p.getRegisteredEmail();
+      if (current != null && current.trim().equalsIgnoreCase(mail)) {
+        return ForceEnrolDecision.UNCHANGED_D;
+      }
+      return new ForceEnrolDecision(ForceEnrolAction.CORRECT, null, mail);
+    }
+    return new ForceEnrolDecision(ForceEnrolAction.ENROL, null, mail);
+  }
+
+  /**
+   * Perform the decided write on a NON-NULL property (the caller's
+   * sanctioned {@code getOrCreate}). Writes ONLY the mailbox and/or the
+   * marker — never a secret, never trust, never {@code lastVerifiedFactor}
+   * (spec §4.1: obligation, never proof). A CORRECT additionally clears the
+   * pending-code state tied to the OLD mailbox, so a code mailed to the old
+   * address cannot complete setup after the correction (D5).
+   */
+  static void applyForceEnrol(MfaUserProperty p, ForceEnrolDecision d) {
+    switch (d.action) {
+      case ENROL:
+        p.setRegisteredEmail(d.email);
+        p.setForcedSetupPending(true);
+        break;
+      case CORRECT:
+        p.setRegisteredEmail(d.email);
+        p.setPendingCodeHash(null);
+        p.setCodeIssuedAt(0L);
+        p.setLastResendAt(0L);
+        // Marker stays TRUE: still an obligation to verify, now at the new box.
+        break;
+      default:
+        throw new IllegalStateException("applyForceEnrol called with " + d.action);
+    }
+  }
+
+  /**
+   * The current authenticated user's id, or "?" (the audit-line actor).
+   */
   private static String actorId() {
     User actor = MfaFilter.findCurrentUser();
     return actor == null ? "?" : actor.getId();
@@ -411,27 +678,84 @@ public final class MfaAdminController implements RootAction {
   // ==================================================================
 
   /**
-   * The enrolled-only roster (Ruling 4, "FOR NOW" — the follow-up
-   * force-enrol view per the same ruling reuses this row list; tracked as
-   * A24). Unenrolled users have no row: they cannot be locked out and
-   * need no recovery surface. Sorted by id for a stable DOM. Every read
-   * is get-only — never getOrCreate (the audit's no-write-hot-path rule),
-   * never the actor's session state. The mailbox is MASKED at the source
-   * (MfaController.maskEmail, A16): the plaintext never enters the DOM.
+   * The ENROLLED slice of the roster — the recovery surface (clear/revoke
+   * verbs). A24/D9: this was the whole roster in A22-b; it is now one of
+   * three explicit rollout views ({@link #getSetupPendingRows()} and the
+   * REQUIRED-only complement {@link #getNotEnrolledRows()}). Sorted by id
+   * for a stable DOM. Every read is get-only — never getOrCreate (the
+   * audit's no-write-hot-path rule), never the actor's session state. The
+   * mailbox is MASKED at the source (MfaController.maskEmail, A16); blank
+   * mailboxes render the literal "(no mailbox)" (D14) so a missing address
+   * is never mistaken for a masked one.
    */
   public List<AdminRow> getRosterRows() {
+    return rowsOf(RolloutState.ENROLLED);
+  }
+
+  /**
+   * A24 (D9): the SETUP-PENDING slice — admin-forced enrolments that already
+   * carry an email factor (so {@code isMfaEnabled()} alone would misleadingly
+   * call them complete) but whose target has not yet verified. Visible under
+   * BOTH policies: even with the gate off, a pending marker stays honestly
+   * labelled. Same read-plane rules as the enrolled slice.
+   */
+  public List<AdminRow> getSetupPendingRows() {
+    return rowsOf(RolloutState.SETUP_PENDING);
+  }
+
+  /**
+   * A24 (D9/D14): the NOT-ENROLLED complement — the true enforcement
+   * worklist under REQUIRED, including blank-mailbox records rendered as
+   * "(no mailbox)" so the empty-roster blind spot stays closed. Hidden when
+   * {@link #isComplementVisible()} is false (Policy.OFF). Never mutates on GET.
+   */
+  public List<AdminRow> getNotEnrolledRows() {
+    return rowsOf(RolloutState.NOT_ENROLLED);
+  }
+
+  /** D9 visible counts — an empty table must look like data, not breakage. */
+  public int getEnrolledCount() {
+    return getRosterRows().size();
+  }
+
+  public int getSetupPendingCount() {
+    return getSetupPendingRows().size();
+  }
+
+  public int getNotEnrolledCount() {
+    return getNotEnrolledRows().size();
+  }
+
+  /**
+   * D9 visibility of the not-enrolled complement: REQUIRED only. Under OFF
+   * the gate is dead and the complement would be a directory rather than an
+   * enforcement worklist; already-enrolled recovery rows remain.
+   */
+  public boolean isComplementVisible() {
+    try {
+      return DevcruMfaConfig.currentSafe().getPolicy()
+          == DevcruMfaConfig.Policy.REQUIRED;
+    } catch (RuntimeException e) {
+      return false; // pre-boot: hide, never 500 the render
+    }
+  }
+
+  /** One id-sorted filtered slice of User.getAll(), classified per rolloutState. */
+  private static List<AdminRow> rowsOf(RolloutState wanted) {
     List<AdminRow> rows = new ArrayList<>();
     try {
       for (User u : User.getAll()) {
         MfaUserProperty p = u.getProperty(MfaUserProperty.class);
-        if (p == null || !p.isMfaEnabled()) {
-          continue; // registered-but-unenrolled: out of roster scope
+        RolloutState st = rolloutState(p);
+        if (st != wanted) {
+          continue;
         }
-        String mail = (p.getRegisteredEmail() != null && !p.getRegisteredEmail().isBlank())
-            ? p.getRegisteredEmail() : "(no mailbox)";
-        rows.add(new AdminRow(u.getId(), u.getFullName(), MfaController.maskEmail(mail),
-            p.hasTotpFactor(), p.hasEmailFactor(),
-            p.getTrustedUntilMs() > System.currentTimeMillis()));
+        String mail = (p != null && p.getRegisteredEmail() != null && !p.getRegisteredEmail().isBlank())
+            ? MfaController.maskEmail(p.getRegisteredEmail()) : "(no mailbox)";
+        rows.add(new AdminRow(u.getId(), u.getFullName(), mail,
+            p != null && p.hasTotpFactor(), p != null && p.hasEmailFactor(),
+            p != null && p.getTrustedUntilMs() > System.currentTimeMillis(),
+            st.name(), accountStateOf(u)));
       }
     } catch (RuntimeException e) {
       // Jenkins not fully up (early bootstrap): the page renders an empty
@@ -550,15 +874,20 @@ public final class MfaAdminController implements RootAction {
     private final boolean hasTotp;
     private final boolean hasEmail;
     private final boolean trustLive;
+    private final String rolloutState;
+    private final String accountState;
 
     AdminRow(String userId, String displayName, String maskedMail,
-             boolean hasTotp, boolean hasEmail, boolean trustLive) {
+             boolean hasTotp, boolean hasEmail, boolean trustLive,
+             String rolloutState, String accountState) {
       this.userId = userId;
       this.displayName = displayName;
       this.maskedMail = maskedMail;
       this.hasTotp = hasTotp;
       this.hasEmail = hasEmail;
       this.trustLive = trustLive;
+      this.rolloutState = rolloutState;
+      this.accountState = accountState;
     }
 
     public String getUserId() {
@@ -583,6 +912,16 @@ public final class MfaAdminController implements RootAction {
 
     public boolean isTrustLive() {
       return trustLive;
+    }
+
+    /** "ENROLLED" | "SETUP_PENDING" | "NOT_ENROLLED" — separate from factor truth. */
+    public String getRolloutState() {
+      return rolloutState;
+    }
+
+    /** "active" | "disabled" | "unknown" — never guessed (D6). */
+    public String getAccountState() {
+      return accountState;
     }
   }
 }
