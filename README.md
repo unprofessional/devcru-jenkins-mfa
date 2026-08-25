@@ -133,6 +133,27 @@ architecture & design-decision record used to audit the code.
 > (valid archive, real entry count, sha sidecar) *before* anything is
 > touched — a corrupt or truncated snapshot fails the build instead of
 > becoming the rollback rung you reach for later.
+>
+> The admin settings page (Manage Jenkins → Security → Devcru MFA) now
+> shows a readable label and description for every setting, in every
+> language-neutral install: on 2026-08-24 a production walk found several
+> settings rendered their internal key names (e.g. the "Factor recovery"
+> section's title appeared as a raw code word) and one description cut
+> off mid-sentence. The labels are fixed and a test now fails the build if
+> any setting on that page ever loses its human-readable text again.
+>
+> The standalone admin page for managing other users' MFA factors
+> (reached from that settings page's "Factor recovery" link) now offers a
+> back link, so you are never stranded on it: from the roster the link
+> returns to the Security configuration page; from the permission-denied
+> view it returns to the Manage Jenkins console (the settings page is not
+> reachable to a non-admin, so that is where their route off the page
+> goes). The link is computed for your installation's URL, so it works
+> the same whether Jenkins is served from the site root or from a path
+> like /jenkins. The settings page's Gate Policy setting now also
+> works as a proper drop-down (REQUIRED / OFF): previously the box
+> rendered empty and every page load wrote an error line to the
+> controller log, which is now gone.
 
 ### Enrolling
 
