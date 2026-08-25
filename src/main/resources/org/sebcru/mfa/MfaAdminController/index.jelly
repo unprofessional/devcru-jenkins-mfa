@@ -412,7 +412,7 @@
           <j:otherwise>
             <table class="rosterTable">
               <thead>
-                <tr><th>User</th><th>Account</th><th>Delivery address</th><th>Factors</th></tr>
+                <tr><th>User</th><th>Account</th><th>Delivery address</th><th>Factors</th><th>Actions</th></tr>
               </thead>
               <tbody>
                 <j:forEach var="row" items="${it.setupPendingRows}">
@@ -424,6 +424,18 @@
                       <j:if test="${row.isTotp()}"><span class="factor factor-totp">TOTP</span></j:if>
                       <j:if test="${row.isEmail()}"><span class="factor factor-email">EMAIL</span></j:if>
                       <j:if test="${!row.isTotp() and !row.isEmail()}"><span class="none">none</span></j:if>
+                    </td>
+                    <td>
+                      <!-- A24 review fix: a setup-pending user carries a live
+                           forced email factor but has NOT verified — if they
+                           lose mailbox access pre-verify they are stranded
+                           under REQUIRED. clearFactors (which also clears the
+                           marker, D8) is their recovery path; same typed-id
+                           confirmation UX as the enrolled roster. -->
+                      <button type="button" class="btn btn-danger"
+                              data-op="clearFactors"
+                              data-user-id="${row.userId}"
+                              data-display="${row.displayName}">Clear factors</button>
                     </td>
                   </tr>
                 </j:forEach>
