@@ -7,7 +7,7 @@ Three legs, per handoff §1-D acceptance criteria:
      The Gate Policy control is a working <select> whose options are
      REQUIRED/OFF with REQUIRED selected (D1 contents + D3 filler).
   2. Controller log CLEAN of the doFillPolicyItems exception (D3), checked
-     via /logText — the exact production signature from the live log.
+     via /log/all — the exact production signature from the live log.
   3. The admin page (roster arm) shows a back link to the Security
      configuration that NAVIGATES; the 403 denial arm shows a back link
      to the Manage Jenkins console (D2, both arms, both colour schemes).
@@ -163,7 +163,6 @@ try:
          "policy select", 30)
 
     body = c.js("document.body.innerText")
-    html = c.js("document.innerHTML")
 
     # (a) no raw key name in any rendered LABEL/title (D1: the walk defect
     #     was a *section title* rendering as a key). Label texts are pulled
@@ -223,7 +222,9 @@ try:
     c.raw("Emulation.setEmulatedMedia",
           {"features":[{"name":"prefers-color-scheme","value":"light"}]})
     c.shot(str(OUT / "1d-config-form-light.png"))
-    check("L1 screenshots captured dark+light", True)
+    check("L1 screenshots captured dark+light",
+          all((p.exists() and p.stat().st_size > 0) for p in
+              (OUT / "1d-config-form-dark.png", OUT / "1d-config-form-light.png")))
 
     # LEG 2: controller log clean (D3) -----------------------------------
     # The exact production signature from the live log, checked through the
@@ -291,7 +292,9 @@ try:
     c.raw("Emulation.setEmulatedMedia",
           {"features":[{"name":"prefers-color-scheme","value":"light"}]})
     c.shot(str(OUT / "1d-roster-back-light.png"))
-    check("L3b roster arm captured dark+light with link", True)
+    check("L3b roster arm captured dark+light with link",
+          all((p.exists() and p.stat().st_size > 0) for p in
+              (OUT / "1d-roster-back-dark.png", OUT / "1d-roster-back-light.png")))
 finally:
     c.close()
 
@@ -303,7 +306,8 @@ try:
           {"features":[{"name":"prefers-color-scheme","value":"dark"}]})
     body = c.js("document.body.innerText")
     check("L3c reader is on the 403 denial arm",
-          ("permission" in body.lower() or "403" in body) and "adminRoster" not in body,
+          ("permission" in body.lower() or "403" in body)
+          and not c.js("!!document.querySelector('#adminRoster')"),
           body[:200])
     back = c.js("""(() => { const a=document.querySelector('a[href*="/manage/"]');
        return a ? {href:a.href, text:a.textContent.trim()} : null; })()""")
@@ -315,7 +319,9 @@ try:
     c.raw("Emulation.setEmulatedMedia",
           {"features":[{"name":"prefers-color-scheme","value":"light"}]})
     c.shot(str(OUT / "1d-denial-back-light.png"))
-    check("L3d denial arm captured dark+light with link", True)
+    check("L3d denial arm captured dark+light with link",
+          all((p.exists() and p.stat().st_size > 0) for p in
+              (OUT / "1d-denial-back-dark.png", OUT / "1d-denial-back-light.png")))
 finally:
     c.close()
 
