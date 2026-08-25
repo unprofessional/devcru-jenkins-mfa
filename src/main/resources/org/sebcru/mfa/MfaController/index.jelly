@@ -116,8 +116,17 @@
     </head>
     <body>
       <div class="card">
-        <h1>MFA verification — <j:out value="${it.issuer}"/></h1>
-        <p class="sub">Enter a code to finish signing in to Jenkins.</p>
+        <j:choose>
+          <j:when test="${it.isForcedSetup()}">
+            <h1>Finish MFA setup — <j:out value="${it.issuer}"/></h1>
+            <p class="sub">Your administrator enabled MFA for your account.
+              Verify a code below to finish setup and continue.</p>
+          </j:when>
+          <j:otherwise>
+            <h1>MFA verification — <j:out value="${it.issuer}"/></h1>
+            <p class="sub">Enter a code to finish signing in to Jenkins.</p>
+          </j:otherwise>
+        </j:choose>
 
         <div id="msg" class="msg hidden" role="alert"></div>
 
@@ -152,6 +161,11 @@
           </p>
         </j:if>
 
+        <j:if test="${it.isForcedSetup()}">
+          <p class="hint">Step 2 (optional): after your code verifies you can
+            add an authenticator app from your security profile — email alone
+            already counts. You may skip this.</p>
+        </j:if>
         <p class="hint">5 wrong codes inside 30 minutes locks this account for
           15 minutes. A successful check remembers this browser for the
           configured window.</p>
