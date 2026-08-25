@@ -1,5 +1,6 @@
 package org.sebcru.mfa;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -101,11 +102,20 @@ class MfaAdminBackLinkTest {
         link,
         "the roster arm must offer a back link — the production walk's"
             + " defect: the admin page is an island with no route off it");
+    // D2 rework (2026-08-24, real-browser walk): the href is BOUND
+    // (${it.securityConfigLink}), not a literal path. A literal
+    // "/manage/configureSecurity/" is absolute-rooted and dies under a
+    // non-root context path — hpi:run serves at "/jenkins", where the
+    // browser resolves "/manage/…" to the site's SIBLING, getting a 404
+    // on the very "back" affordance. The controller's getter rooters the
+    // URL from Jenkins.getRootUrl()/context (same idiom as
+    // getAdminScriptUrl, pinned by backLinkUrlRootsItsTargetBelow).
     assertTrue(
-        link.contains("href=\"/manage/configureSecurity/\""),
-        "the back link must target /manage/configureSecurity/ ABSOLUTE — a"
-            + " relative href dies under a non-root context path (the"
-            + " script-URL defect class): " + link);
+        link.contains("href=\"${it.securityConfigLink}\""),
+        "the roster back link must be BOUND to the controller's"
+            + " security-config getter (root-aware), not a literal"
+            + " absolute-rooted path that 404s under a /jenkins context:"
+            + " " + link);
     // Whitespace is collapsed in the HTML source but not in the file text;
     // the rendered NAME is what the pin protects.
     String renderedName = link.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ");
@@ -126,23 +136,72 @@ class MfaAdminBackLinkTest {
             + " from a surface they cannot use is the STRANDEST case; the"
             + " denial page is part of the face, not an afterthought");
     // Arm-aware target (ruling documented in the commit): the denial arm's
-    // audience is an authenticated NON-admin, and
+    // audience is an authenticated NON-admin, for whom
     // /manage/configureSecurity/ is itself ADMINISTER-gated — sending them
     // there only hands them core's 403 page. The handoff left the target
     // open ("or a Manage Jenkins breadcrumb"); their reachable home is the
-    // admin console root, so THAT arm points at /manage/, while the roster
-    // arm (whose audience CAN reach the front door) points at the security
-    // config page. Both absolute-rooted; both named.
+    // console root, so THAT arm binds the manage-console getter, while the
+    // roster arm (whose audience CAN reach the front door) binds the
+    // security-config getter. Same BOUND (root-aware) discipline on both.
     assertTrue(
-        link.contains("href=\"/manage/\""),
-        "the denial arm's back link must target /manage/ (the admin console"
-            + " root) absolute — /manage/configureSecurity/ would 403 for"
-            + " this arm's non-admin audience: " + link);
+        link.contains("href=\"${it.manageConsoleLink}\""),
+        "the denial arm's back link must be BOUND to the controller's"
+            + " manage-console getter (root-aware) — a literal"
+            + " absolute-rooted /manage/ 404s under a /jenkins context"
+            + " (the walk's finding): " + link);
     assertTrue(
-        !link.contains("configureSecurity"),
-        "the denial arm must NOT link to configureSecurity — it is"
+        !link.contains("configureSecurity")
+            && !link.contains("securityConfigLink"),
+        "the denial arm must NOT link to the settings page — it is"
             + " ADMINISTER-gated and this arm's audience does not hold it:"
             + " " + link);
+  }
+
+  /**
+   * WHAT: the D2 back-link URL rooter's three branches — the contract that
+   * makes both arms navigate on a non-root context (the real-browser
+   * finding this round: literal absolute-rooted hrefs 404'd under the
+   * hpi:run "/jenkins" context).
+   * <pre>
+   * GIVEN a rooter over (root, context, inSitePath)
+   * WHEN  root is present                       → root + "/" + path
+   * WHEN  root absent, context present          → context + "/" + path
+   * WHEN  both absent (JenkinsRule empty ctx)   → "/" + path
+   * THEN  each branch yields the in-browser-resolvable absolute URL
+   * </pre>
+   * WHY / SOLVES: this is the seam between "the link exists" (the arm
+   * legs above) and "the link ACTUALLY navigates" — the part only a
+   * browser can see. The IT renders through JenkinsRule (empty context,
+   * branch 3), the walk hpi:serves at /jenkins (branch 1): pinning both
+   * means either shape cannot regress to a dead link without failing
+   * here, while the walk's L3a leg proves the live branch renders.
+   */
+  @Test
+  @DisplayName("backLinkUrl: root-aware in all three deployment shapes")
+  void backLinkUrlRootsItsTargetInAllThreeShapes() {
+    // Branch 1 — the hpi:run shape (the one that 404'd this round).
+    assertEquals(
+        "http://127.0.0.1:8081/jenkins/manage/configureSecurity/",
+        MfaAdminController.backLinkUrl(
+            "http://127.0.0.1:8081/jenkins/",
+            "/jenkins", "manage/configureSecurity/"),
+        "root present must WIN: a /jenkins install resolves the settings"
+            + " page under the context, not at the host root");
+    // Branch 2 — root not configured (Jenkins' getRootUrl() is ""), context
+    // present: the browser is still rooted, so context + path.
+    assertEquals(
+        "/jenkins/manage/",
+        MfaAdminController.backLinkUrl("", "/jenkins", "manage/"),
+        "an unconfigured rootUrl with a context path must fall through to"
+            + " context rooting — this is the hpi:run shape before the"
+            + " admin sets the URL in Manage Jenkins: System");
+    // Branch 3 — JenkinsRule: neither root nor context, plain "/…".
+    assertEquals(
+        "/manage/configureSecurity/",
+        MfaAdminController.backLinkUrl(null, "",
+            "manage/configureSecurity/"),
+        "the IT/JenkinsRule shape (empty context) keeps the classic"
+            + " site-root URL");
   }
 
   @Test

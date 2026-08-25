@@ -455,6 +455,67 @@ public final class MfaAdminController implements RootAction {
     }
   }
 
+  /**
+   * D2 — the roster arm's back link target: the Security configuration
+   * page, the face's front door (where the walk reached this surface).
+   * Root-aware: a literal {@code /manage/…} absolute-rooted href dies
+   * under a non-root context path (hpi:run serves at {@code /jenkins}, so
+   * the browser resolves a stray {@code /manage/} to {@code /jenkins}/'s
+   * sibling, not its child) — the same defect class as {@link
+   * #getAdminScriptUrl()}.
+   */
+  public String getSecurityConfigLink() {
+    return backLinkUrl("manage/configureSecurity/");
+  }
+
+  /**
+   * D2 — the 403 denial arm's back link target: the admin console root.
+   * Arm-aware, deliberate (see README + MfaAdminBackLinkTest): the denial
+   * arm's audience is an authenticated NON-admin for whom
+   * {@code manage/configureSecurity/} is itself ADMINISTER-gated, so their
+   * route off the page is the console root, not the settings page.
+   */
+  public String getManageConsoleLink() {
+    return backLinkUrl("manage/");
+  }
+
+  /**
+   * One shared rooter for the page's outbound links (D2). Pure over its
+   * three inputs so the branch logic is unit-pinned without a booted
+   * Jenkins (see {@code MfaAdminBackLinkTest#backLinkUrl*}): root present
+   * → root + path; root absent, context present → context + "/" + path;
+   * both absent → "/" + path (JenkinsRule's empty context). This is what
+   * "root-aware" means concretely; the glue below feeds it the live
+   * values.
+   */
+  public static String backLinkUrl(String root, String contextPath,
+      String inSitePath) {
+    if (root != null && !root.isBlank()) {
+      String r = root.endsWith("/") ? root : root + "/";
+      return r + inSitePath;
+    }
+    String ctx = (contextPath == null) ? "" : contextPath;
+    String c = (ctx.endsWith("/") ? ctx.substring(0, ctx.length() - 1) : ctx);
+    return (c.isEmpty() ? "" : c) + "/" + inSitePath;
+  }
+
+  private String backLinkUrl(String inSitePath) {
+    return backLinkUrl(rootOrNull(), contextOrNull(), inSitePath);
+  }
+
+  private static String rootOrNull() {
+    try {
+      return Jenkins.get().getRootUrl();
+    } catch (RuntimeException e) {
+      return null;
+    }
+  }
+
+  private static String contextOrNull() {
+    StaplerRequest2 req = Stapler.getCurrentRequest2();
+    return req == null ? null : req.getContextPath();
+  }
+
   public String getCrumbField() {
     return hudson.Functions.getCrumbRequestField();
   }

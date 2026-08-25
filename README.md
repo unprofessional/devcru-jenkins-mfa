@@ -148,10 +148,12 @@ architecture & design-decision record used to audit the code.
 > returns to the Security configuration page; from the permission-denied
 > view it returns to the Manage Jenkins console (the settings page is not
 > reachable to a non-admin, so that is where their route off the page
-> goes). The settings page's Gate Policy setting now also works as a
-> proper drop-down (REQUIRED / OFF): previously the box rendered empty
-> and every page load wrote an error line to the controller log, which is
-> now gone.
+> goes). The link is computed for your installation's URL, so it works
+> the same whether Jenkins is served from the site root or from a path
+> like /jenkins. The settings page's Gate Policy setting now also
+> works as a proper drop-down (REQUIRED / OFF): previously the box
+> rendered empty and every page load wrote an error line to the
+> controller log, which is now gone.
 
 ### Enrolling
 
