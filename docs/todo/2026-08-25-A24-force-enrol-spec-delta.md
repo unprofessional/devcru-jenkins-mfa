@@ -1,6 +1,6 @@
 # A24 spec delta — force-enrol view + third verb + first-time MFA setup
 
-> **Status: DRAFT — rulings needed (§9). Spec-first; nothing implemented.**
+> **Status: APPROVED — all 16 §9 decisions ruled AS RECOMMENDED (mads, 2026-08-25). Implementation authorized.**
 > **Branch:** `a24-spec-delta` (off `develop`, post-A22-b/§1-D)
 > **Debt entry:** `docs/todo/TECH_DEBT.md` § "Not in the code yet" — **A24**
 > **Named because:** A22-b Ruling 4 scoped the roster **enrolled-only — FOR
@@ -403,4 +403,6 @@ explicit ruling for every item here before implementation begins.
     the page claimed completion.
 
 ---
-*Ruling record goes here once received, A22-b §9 style.*
+*Ruling record received 2026-08-25 (mads, Discord channel 1539025444295413770):
+"ALL decisions approved AS RECOMMENDED." D1–D16 stand exactly as written above;
+the recommended defaults are the binding rulings. No alternatives selected.*
