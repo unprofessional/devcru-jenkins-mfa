@@ -1,13 +1,13 @@
 # A24 spec delta — force-enrol view + third verb + first-time MFA setup
 
-> **Status: DRAFT — rulings needed (§8). Spec-first; nothing implemented.**
+> **Status: DRAFT — rulings needed (§9). Spec-first; nothing implemented.**
 > **Branch:** `a24-spec-delta` (off `develop`, post-A22-b/§1-D)
 > **Debt entry:** `docs/todo/TECH_DEBT.md` § "Not in the code yet" — **A24**
 > **Named because:** A22-b Ruling 4 scoped the roster **enrolled-only — FOR
 > NOW**, explicitly because this follow-up reuses that roster as the
 > force-enrolment surface. The handoff (§1-C) is binding on process:
 > spec + mads's rulings BEFORE any implementation, and the real-browser
-> acceptance MUST run on qwen3.8:27b and state so.
+> acceptance MUST run on `qwen3.8:27b-mtp-q8_0` and state that exact model.
 > This document is a **delta**: everything in
 > `2026-08-23-A22b-admin-factor-management-spec.md` not modified here stands.
 
@@ -40,33 +40,45 @@ Ruling 4 chose the row-list render model and the `userId`+operation wire
 shape **specifically so this delta needs no new page and no wire-shape
 rework**. Honoured here:
 
-- One surface: `MfaAdminController` at `/mfaAdmin`. No new controller, no
-  new mount, no filter changes beyond nothing — `mfaadmin` is already in
-  the `isSecurityPath` carve-out.
+- One admin surface: `MfaAdminController` at `/mfaAdmin`. No second admin
+  controller or roster model. `mfaadmin` is already in the
+  `isSecurityPath` carve-out; any first-time setup routing/filter delta is
+  specified separately in §6 and must remain token/segment precise.
 - Third verb rides the existing POST contract: `@RequirePOST` +
   `@WebMethod(name = "forceEnrol")`, parameters `userId` +
   `confirmUserId` (typed-id confirmation, Ruling 5 applies verbatim —
   one rule for the whole surface, no lighter confirmation hiding behind a
   "less destructive" label).
-- The §4 seam grows one guard input, not a new seam (§5).
+- The existing actor-authorization seam stays unchanged; the new endpoint
+  adds a pure target-state decision after the existing permission,
+  credential, self-target, and typed-confirm checks (§4.3).
 
 ## 3. The complement view (fixing the empty roster)
 
-When `DevcruMfaConfig.current().getPolicy() == REQUIRED`, the page renders
-**two rosters**:
+When `DevcruMfaConfig.current().getPolicy() == REQUIRED`, the same pure row
+list exposes three explicit rollout states (sections or filter views, per D9):
 
-- **Enrolled** — the existing `AdminRow` list, unchanged (recovery verbs).
-- **Not enrolled** — the complement: users carrying either no
-  `MfaUserProperty` or one where `isMfaEnabled()` is false. Row model is
-  `AdminRow` narrowed (id, display name, masked mailbox-or-"(none)",
-  factor columns all "—") plus one new column: **enrolment state**
-  ("never enrolled" vs "pending setup" — see §4).
+- **Enrolled** — `isMfaEnabled()` true and `forcedSetupPending` false; the
+  existing recovery verbs remain.
+- **Setup pending** — `forcedSetupPending` true. Under the recommended email
+  design these rows already have an email factor, so `isMfaEnabled()` alone
+  would misleadingly call them complete; they stay separately visible until
+  the target actually verifies.
+- **Not enrolled** — no live factor and no pending marker: the true complement
+  that carries the force-enrol control.
 
-Under `Policy.OFF` the complement section is hidden entirely: with the gate
-killed, "who isn't enrolled" is a compliance question, not a security one,
-and rendering it would make the page a user-directory for no protective
-purpose. (This preserves the A22-b rationale for enrolled-only scope under
-OFF; REQUIRED is what turns the complement from directory into duty.)
+All rows keep exact id, display name, masked mailbox-or-"(none)", explicit
+factor indicators (TOTP/email/none), **rollout state** (enrolled/setup
+pending/not enrolled), and **account state** (active/disabled/unknown).
+Factor reality, rollout obligation, and account status must be separate labels
+so an admin can see why a row is actionable. Visible counts and honest
+zero-state copy for all three prevent an empty table from looking like a read
+failure.
+
+Under `Policy.OFF` the not-enrolled complement is hidden by the recommended
+D9 ruling: with the gate killed, it is a directory rather than an enforcement
+worklist. Already-enrolled rows remain the recovery roster, and a pending
+marker remains visibly labelled there even though OFF does not block its user.
 
 The same read-plane rules apply: `User.getAll()`, get-only, no
 `getOrCreate`, masked mailboxes, stable sort, safe-degradation to empty on
@@ -76,19 +88,32 @@ bootstrap-time RuntimeExceptions.
 
 ### 4.1 What the verb does (and deliberately does not do)
 
-`POST /mfaAdmin/forceEnrol?userId=<u>&confirmUserId=<u>&email=<mailbox>`:
+`POST /mfaAdmin/forceEnrol` with crumb-bearing form fields
+`userId=<u>`, `confirmUserId=<u>`, and `email=<mailbox>`. This reuses the
+existing request shape and 200 JSON success envelope:
 
-- Writes ONLY `registeredEmail` on the target's property (creating the
-  property if absent — the one sanctioned `getOrCreate`, inside the same
-  single-writer endpoint), then `target.save()`.
-- Effect: `isMfaEnabled()` flips true (email factor present), the gate now
-  treats the target as enrolled, and the target has **no live trust and no
-  verified session** — their very next request is bounced to `/mfa` for
-  first-time setup (§6).
+```json
+{"ok":true,"op":"forceEnrol"}
+```
+
+The existing 403 `admin_permission_required` /
+`admin_verification_required` and 200 JSON business-denial conventions remain
+unchanged. The mutation then:
+
+- Writes `registeredEmail` plus a non-secret `forcedSetupPending` marker on
+  the target's property (creating the property if absent — the one sanctioned
+  `getOrCreate`, inside the same single-writer endpoint), then one
+  `target.save()`.
+- Effect: `isMfaEnabled()` flips true (email factor present), the marker
+  distinguishes admin-forced setup from ordinary enrolled state, and the
+  target has **no live trust and no verified session** — their very next
+  request is bounced to `/mfa` for first-time setup (§6).
 - It does NOT: generate or set any secret, touch `totpSecret`,
   `pendingCodeHash`, `trustedUntilMs`, or any session attribute; mark the
-  user verified; grant trust. **Force-enrol creates an obligation to
-  verify; it can never create a proof of verification.** The admin's
+  user verified; grant trust. The marker clears only after successful factor
+  verification persists, or through the ruled rollback path.
+  **Force-enrol creates an obligation to verify; it can never create a proof
+  of verification.** The admin's
   action is unreadable as "the admin vouched for this session" — the
   target still has to produce a real factor check before anything else
   happens. This is the load-bearing security line of the whole feature.
@@ -104,33 +129,44 @@ TOTP remains available (and encouraged) as self-service add-on afterwards.
 On each complement-row: a mailbox field + button. Confirm dialog states the
 consequence plainly ("<id> will be required to complete MFA setup at their
 next login"). Typed-id confirmation required, server-rechecked (Ruling 5).
-Audit line, loud-not-silent:
+On success the row moves from `Not enrolled` to `Setup pending`, counts
+update, and reload derives the same result from persisted state. Audit line,
+loud-not-silent:
 `WARNING MFA admin <actor> force-enrolled user <target> (email factor)`.
 
-### 4.3 Guard extension
+### 4.3 Guard and target-state extension
 
-Existing ordering (permission → user → self → verify) gains one branch;
-the seam signature becomes
-`adminAllowed(..., isSelf, sessionVerified, trustLive, targetAlreadyEnrolled)`:
+The existing actor seam remains
+`adminManageAllowed(administer, enrolled, sessionVerified, trustLive)`.
+The endpoint follows today's order: `answerAdminDenied` (permission then
+credential) → `denyOrConfirmError` (self-target then exact typed id) →
+non-creating target lookup → target-state decision → mutation/save. Target
+state must not be folded into the actor-authorization seam.
 
-- `isSelf` → denied exactly as today (`self_management_forbidden`) — an
-  admin enrols themselves through their own profile tab like everyone else.
-- `targetAlreadyEnrolled` → `{ok:false, error:"already_enrolled"}` — the
-  double-click/idempotency shape mirrors `not_enrolled` on clearFactors.
-- Mailbox validation: same mask/format rule as the self-service save path;
-  invalid → `invalid_email`; blank → refused (blank would silently
-  un-enrol, which is clearFactors' job, single-writer rule).
+- Self-target is denied exactly as today
+  (`admin_self_management_forbidden`) — an admin enrols themselves through
+  their own profile tab like everyone else.
+- An ordinarily enrolled target returns `{ok:false,
+  error:"already_enrolled"}`. A target already carrying
+  `forcedSetupPending` follows the D5 idempotence/correction ruling.
+- Mailbox validation is an A24 endpoint contract (the current property
+  setter normalizes blank state but is not an address validator): syntactically
+  invalid → `invalid_email`; blank → refused (blank would silently un-enrol,
+  which is `clearFactors`' job, single-writer rule). Address ownership is
+  proved only when the target enters the code delivered to that registered
+  mailbox; the admin's POST proves no mailbox control.
 
 ## 5. Edge cases
 
 | Case | Behaviour |
 |---|---|
-| Already-pending user (property exists, `registeredEmail` set, never verified) | Force-enrol with the SAME address → idempotent `already_enrolled` ok-envelope? No — treated as a **re-enrol update**: a different address replaces `registeredEmail` (single field write, `save()`), audit-logged as an update; the same address short-circuits `already_enrolled`. Rationale: the admin fixing a typo'd mailbox must not have to clear the user's whole state first. **Ruling needed — D3.** |
-| Disabled/deleted user | `user_not_found` for missing; a disabled-in-realm user gets the same treatment as any existing user (the gate handles disabled accounts upstream; the admin surface does not duplicate realm policy). No oracle difference beyond the existing strings. |
+| Already-pending user (`forcedSetupPending` true) | Same address short-circuits idempotently; a different address is an explicit **pending-enrolment correction**: replace `registeredEmail`, keep the marker true, clear any pending email-code state tied to the old mailbox, save once, and audit the update. Rationale: fixing a typo must neither require factor-clear first nor leave an old-address code live. **Ruling needed — D5.** |
+| Disabled/deleted user | `user_not_found` for missing. Recommended pending D6: a positively disabled realm user remains visible with a Disabled indicator but force-enrol is refused; unknown realm status is labelled honestly and cannot 500 the roster. |
 | Target mid-session when force-enrolled | Their current session carries no VERIFIED_ATTR and no trust (they were unenrolled, so they could never earn either). Next request → gate bounces to `/mfa`. No session invalidation is sent and none is needed — the gate does the work per-request. Pinned in IT (leg 3 tail): a live pre-existing session of the target is bounced, not waved through. |
-| Actor persistence failure | §5 of the parent spec verbatim: `{ok:false, error:"persistence_error"}` + SEVERE log. Never `ok:true` over an unpersisted enrolment — worse here than in recovery: the admin believes the user is covered, the user believes they're exempt, both wrong. |
-| Rollback / off switch | Two levels, both existing seams: per-user, the admin runs `clearFactors` (A22-b verb 1) — force-enrol leaves no residue it doesn't share with normal enrolment; fleet-wide, `Policy.OFF` is the kill-switch path and hides the complement view (§3). No new undo machinery. |
-| Unenrolled-admin actor | Ruling 3 (A22-b) binds unchanged: reads yes, mutates no — `verification_required`. |
+| Actor persistence failure | §5 of the parent spec verbatim: `{ok:false, error:"persistence_failed"}` + SEVERE log. Never `ok:true` over an unpersisted enrolment — worse here than in recovery: the admin believes the user is covered, the user believes they're exempt, both wrong. |
+| Valid setup code but marker-clear save fails | Recommended pending D16: return `persistence_failed`, leave setup pending, issue no trust/verified-session success, and log loudly without the code/address. This deliberately tightens the current ordinary-verify save-failure behavior for the forced setup branch so "setup complete" survives restart or is not claimed. |
+| Rollback / off switch | Per-user, recommended D8: `clearFactors` also clears `forcedSetupPending` in the same save. Fleet-wide, `Policy.OFF` is the immediate gate kill switch and hides the complement view (§3); it does not delete factors or markers. |
+| Unenrolled-admin actor | Ruling 3 (A22-b) binds unchanged: reads yes, mutates no — `admin_verification_required`. |
 
 ## 6. First-time MFA setup flow (post-enforcement)
 
@@ -140,10 +176,12 @@ session hitting anything lands on `/mfa` exactly as a locked-out user does
 today is presentation, not mechanics: `/mfa` currently assumes "you have a
 factor, prove it".
 
-Delta: when the arriving session's property has a registered mailbox but
-zero completed verifications ever (`lastVerifiedFactor` unset AND no live
-trust — a cheap, honest "first time" signal derived from existing fields),
-`MfaController`'s page renders the **setup variant**:
+Delta: when the arriving session's property carries
+`forcedSetupPending`, `MfaController` renders the **setup variant**. Do not
+infer first-time state from `lastVerifiedFactor`: the current field is a
+factor enum (`0 = TOTP`, `1 = email`) whose default `0` is indistinguishable
+from a real prior TOTP verification; expired trust likewise does not mean
+"never verified." The explicit marker is the honest signal:
 
 1. Explains the state in one sentence: your administrator enabled MFA for
    your account; finish setup to continue.
@@ -153,17 +191,18 @@ trust — a cheap, honest "first time" signal derived from existing fields),
    enrolment inline ("add an authenticator now"); skippable — the user is
    legitimately enrolled on email alone. Skipped-TOTP is recorded nowhere;
    no nag-state field is added.
-4. On success the existing verify path sets VERIFIED_ATTR / issues trust
-   exactly as any other verification. Nothing about setup bypasses
-   verification because setup IS verification — the variant is copy plus
-   step order, not new authorization.
+4. On success the existing verify path clears `forcedSetupPending`, grants
+   trust, and persists those changes together before it regenerates/marks the
+   session verified exactly as any other verification. Nothing about setup
+   bypasses verification because setup IS verification — the variant is copy
+   plus step order, not new authorization.
 
 Security pins carried explicitly:
 
 - Setup variant renders only for the session's OWN property (self-service
   endpoints, unchanged guard).
-- No endpoint may flip `lastVerifiedFactor` or issue trust except the two
-  existing verify endpoints (single-writer invariant restated; the A23
+- No admin/setup endpoint may flip `lastVerifiedFactor` or issue trust;
+  successful `postVerify` remains the single verification writer (the A23
   attack-chain IT family stays authoritative).
 - Rate limiter, crumb, nosniff/no-store: untouched, inherited.
 
@@ -175,12 +214,15 @@ Unit (seam + models):
 
 1. Extended `adminAllowed` quadrilateral×enrolment-state matrix — every
    THEN is the stable error string (`already_enrolled`,
-   `self_management_forbidden`, `verification_required`, …).
-2. Complement-row model: unenrolled user produces exactly one row with
-   factor columns false and "(no mailbox)" masking; enrolled user appears
-   in enrolled roster only; under OFF the complement getter returns empty.
-3. First-time-signal derivation: mailbox+never-verified → true;
-   previously-verified (even now cleared?) — pinned per D4 ruling.
+   `admin_self_management_forbidden`,
+   `admin_verification_required`, …).
+2. Roster-state model: never-enrolled, setup-pending, and completed users
+   each land in exactly one view; pending cannot be miscounted as completed
+   merely because the forced email makes `isMfaEnabled()` true; under OFF the
+   not-enrolled view is hidden without erasing pending state.
+3. First-time-state derivation: `forcedSetupPending` alone selects setup;
+   default/TOTP-valued `lastVerifiedFactor` and expired trust cannot
+   impersonate or suppress that marker; marker clearing is pinned per D10.
 
 Integration (`MfaAdminIT` legs added, red-first where genuine):
 
@@ -191,54 +233,174 @@ Integration (`MfaAdminIT` legs added, red-first where genuine):
    on next request → setup variant renders → email code issued/captured/
    verified → target reaches root → `lastVerifiedFactor` set by the verify
    endpoint alone.
-5. **Guard pins:** self-target 403; already-enrolled target envelope;
-   password-only admin 403 `verification_required` with the target's bytes
+5. **Guard pins:** self-target refused with the existing 200 JSON envelope;
+   already-enrolled target envelope; password-only admin 403
+   `admin_verification_required` with the target's bytes
    identical before/after; non-admin 403 at the wire; typed-confirm mismatch
    refused server-side.
 6. **Setup-does-not-bypass pin:** the setup variant's rendered page offers
    no link/form reaching authenticated root content; a direct fetch of a
    protected URL from the half-set-up session is still gated.
+7. **Pending/idempotence:** same-address repeat is unchanged; corrected
+   address invalidates the old pending code; two admin requests never mint a
+   credential or clear the setup marker.
+8. **Failure honesty:** wrong/expired email code, expired session, and
+   marker-clear persistence failure do not release the user; successful
+   verification clears the marker and survives `rule.restart()`.
+9. **Policy/identity edges:** OFF, exempt, disabled, unknown-realm, and
+   deleted-between-render-and-POST behavior matches §9 rulings and cannot
+   create a user record on lookup.
+10. **Regression:** existing clear/revoke, A23 management guards, safe
+    redirect, non-root context, API-token exemption, and admin-factor survival
+    stay green.
 
 Real-browser acceptance (handoff §1-C, binding): walked on the dev instance
-**on qwen3.8:27b, stated in the report** — both themes, force-enrol click-
-through incl. typed confirm, target's first-login setup walk end-to-end in
+**on `qwen3.8:27b-mtp-q8_0`, stated exactly in the report** — confirm the
+active model before and after the walk; then cover both themes, force-enrol
+click-through incl. typed confirm, target's first-login setup walk end-to-end in
 headful Chromium, OFF-switch hiding the complement, context-rooted script
 URL check under a non-root context path.
 
 Docs: README known-gap/A24 paragraph replaced in the landing commit;
 TECH_DEBT A24 moves to Resolved with the commit stamped.
 
-## 8. DECISIONS — rulings needed from mads
+## 8. Implementation sequence after rulings
 
-Each with recommended default; silence-on-review takes the default per house
-process.
+This is a sequencing sketch, not authorization to implement:
 
-1. **Complement-view visibility:** show the not-enrolled roster only under
-   `Policy.REQUIRED` (recommended: yes — under OFF it's a user-directory
-   with no protective purpose; preserves the A22-b enrolled-only rationale
-   in the OFF case). Alternative: always show both rosters.
-2. **Force-enrol writes email factor only** (recommended: yes — TOTP
-   admin-side is a lockout generator; TOTP stays self-service). Alternative:
-   allow admin-paste TOTP secret (rejected in design; would need ruling).
-3. **Re-force-enrol with a different mailbox updates the address** rather
-   than demanding clear-first (recommended: yes — typo-fix ergonomics;
-   audit-logged as an update). Same-address repeat returns
-   `already_enrolled`.
-4. **"First time" signal definition** for the setup variant: mailbox set +
-   `lastVerifiedFactor` unset + no live trust (recommended). Note the odd
-   corner it implies: a user whose factors were admin-cleared AFTER a prior
-   verification will NOT see the setup variant (they've seen `/mfa` before)
-   — acceptable; alternative is a persistent `everVerified` flag, which adds
-   a schema field for cosmetics.
-5. **Skip-TOTP-after-email-setup is allowed** (recommended: yes — email
-   alone is legitimate enrolment per `hasEmailFactor()`; TOTP push stays a
-   nudge). Alternative: make TOTP mandatory at setup (a policy question
-   larger than A24).
-6. **Complement roster includes users with a property-but-blank-mailbox
-   rows showing "(no mailbox)"** (recommended: yes — they're exactly the
-   users needing enrolment; the admin fills the mailbox in the form).
-7. **Verb name on the wire: `forceEnrol`** (recommended; matches house
-   naming, unambiguous in audit lines). Alternative: `enrolUser`.
+1. Record every §9 ruling in this file and reconcile the body before code.
+2. Add red pure tests for roster/state derivation and the expanded admin
+   decision seam, including stable errors and deny-before-mutation.
+3. Add the ruled persisted setup state and extend the existing
+   `AdminRow`/`getRosterRows()` model into enrolled and complement views; do
+   not create a second user index or mutate on GET.
+4. Add the `forceEnrol` endpoint using the existing `userId` +
+   `confirmUserId` wire, authorization order, persistence honesty, and audit
+   pattern.
+5. Add the first-time `/mfa` presentation/state branch without weakening A23
+   guards or broadening the allow-list; reuse verification single-writers.
+6. Add JenkinsRule journey/restart/session/off-switch coverage, then run the
+   full offline CI mirror: `mvn -o -B clean verify`.
+7. Update README practical usage and TECH_DEBT in the same user-facing
+   implementation landing, per `AGENTS.md`.
+8. Perform the §7 real-browser walk on `qwen3.8:27b-mtp-q8_0`, with before/
+   after model confirmation and evidence in the report. No deployment, push,
+   or PR without mads's normal explicit approval.
+
+## 9. **DECISIONS — MADS'S RULINGS REQUIRED; IMPLEMENTATION BLOCKED**
+
+Each item has a recommended default, not an answer-by-silence. Record an
+explicit ruling for every item here before implementation begins.
+
+1. **What force-enrol provisions. RECOMMEND: provision an email factor from
+   an admin-entered mailbox plus a non-secret `forcedSetupPending` marker,
+   but no TOTP seed; the target proves mailbox control with the delivered
+   code before reaching Jenkins.** Alternative A: persist only an
+   `enrolmentRequired` marker and make the user scan/prove a user-generated
+   TOTP candidate. Alternative B: generate or accept a TOTP seed server-side/
+   admin-side (not recommended: the admin now handles a credential and the
+   user can be locked behind a seed they never scanned).
+
+2. **Who chooses/proves the email address. RECOMMEND: the verified admin
+   enters it, the server never echoes it unmasked after the POST, and the
+   target proves ownership by receiving the code; the admin action itself is
+   not verification.** Alternative: derive the mailbox from Jenkins' mailer
+   property (needs a precedence/missing-address rule). If mads chooses the
+   marker/TOTP design in D1, this decision becomes not applicable.
+
+3. **Where first-time setup lives. RECOMMEND: the existing `/mfa` GET with a
+   controller-selected setup variant and existing exact POST routes; no new
+   mount and no broad `/mfa/*` allow-list.** Alternative: dedicated
+   `/mfaSetup/` entry with its own exact allow-list and redirect-loop tests.
+
+4. **Users who never complete setup / grace period. RECOMMEND: no grace
+   period in A24.** Under REQUIRED they remain at `/mfa` until they verify,
+   the admin clears factors, they are exempted/disabled, or policy switches
+   OFF. If grace is wanted, mads must rule its duration, start event (admin
+   POST or first login), warnings, expiry behavior, persistence, and who may
+   extend it.
+
+5. **Already-pending/re-force behavior. RECOMMEND: same mailbox returns an
+   idempotent unchanged result; a different mailbox is an explicit audited
+   correction that replaces `registeredEmail`, keeps `forcedSetupPending`,
+   and invalidates any pending code for the old address.** Alternative:
+   refuse every already-enrolled target and require `clearFactors` first. If
+   D1 chooses a requirement-only marker, recommend repeated force returns
+   unchanged and never generates a second candidate.
+
+6. **Disabled/deleted/unknown-realm users. RECOMMEND: deleted-at-POST is
+   `user_not_found`; positively disabled users remain visible with a
+   `Disabled` indicator but cannot be force-enrolled; realm status that
+   cannot be resolved is `Unknown`, not guessed active.** mads must identify
+   the authoritative disabled signal on the deployed security realm or rule
+   that disabled status remains out of scope. One failed realm lookup must
+   never 500 the whole roster.
+
+7. **Session/trust result. RECOMMEND: force-enrol does not invalidate a live
+   target session itself; the gate catches its next request. Successful code
+   verification uses the existing session-regeneration, VERIFIED_ATTR, and
+   normal remember-browser behavior, so setup does not demand the same code
+   twice.** Alternative: verify the session but suppress remembered trust on
+   the first setup.
+
+8. **Rollback/off switch. RECOMMEND: global `Policy.OFF` bypasses the gate
+   immediately without deleting factors/markers; per-user `clearFactors`
+   clears both the forced email factor and `forcedSetupPending`, and
+   `exemptUsers` is the emergency exception.** Alternative: add a distinct
+   cancel-pending operation. Rule an already-open setup page under OFF;
+   recommended: it becomes optional (the user can leave for Jenkins), while
+   a voluntarily submitted valid code may still complete normal verification.
+
+9. **Complement visibility. RECOMMEND: under `REQUIRED`, show explicit
+   Enrolled / Setup pending / Not enrolled views and counts; under OFF, hide
+   only Not enrolled while retaining recovery rows and pending labels.**
+   Alternative: show all three under OFF and REQUIRED. Under either choice,
+   factors, rollout state, and account active/disabled/unknown are separate
+   indicators, not one overloaded badge.
+
+10. **How the setup variant is identified. RECOMMEND: persisted
+    `forcedSetupPending`, cleared only by successful verification or the
+    ruled admin rollback.** Existing `lastVerifiedFactor` cannot encode
+    "never": `0` means TOTP and is also the Java default, while trust may
+    simply have expired. Alternative: a broader persisted `everVerified` +
+    enrolment-origin model (more state than A24 needs).
+
+11. **Whether TOTP is mandatory after email verification. RECOMMEND: no;
+    email is already a valid factor under `hasEmailFactor()`, so TOTP is a
+    prominent but skippable post-verification nudge.** Alternative: require a
+    user-scanned and code-proved TOTP before release, which makes setup a
+    two-factor-provisioning policy and needs recovery rules.
+
+12. **Exempt, service, and API-only identities. RECOMMEND: exempt users stay
+    visible and labelled but their force action is disabled; preserve current
+    API-token gate exemptions, so A24 governs interactive browser access and
+    says so honestly.** Alternative: force-enrol overrides exemptions or
+    blocks API tokens (larger compatibility/revocation scope). Decide whether
+    historical/API-only `User.getAll()` records count toward compliance.
+
+13. **Bulk rollout. RECOMMEND: no `Force all` in the first A24 landing;
+    accurate complement visibility plus deliberate per-row writes first.** If
+    bulk is required, rule eligible scope, preview, exclusions, confirmation
+    phrase, partial-failure reporting, per-target audit, and rollback.
+
+14. **Blank-mailbox roster rows. RECOMMEND: include every unenrolled
+    `User.getAll()` record, including absent property/blank mailbox, rendered
+    as `(no mailbox)` with the admin field available only when otherwise
+    eligible.** Alternative: hide records that cannot be email-enrolled; not
+    recommended because it recreates the empty-roster blind spot.
+
+15. **Wire verb and confirmation. RECOMMEND: `forceEnrol`, with existing
+    `userId` + exact `confirmUserId` + crumb and A22-b's typed-id dialog.**
+    Alternative name: `enrolUser`. Do not weaken confirmation merely because
+    no factor is deleted; the action can still lock an account behind setup.
+
+16. **Valid verification but persistence failure. RECOMMEND: the forced
+    setup branch returns `persistence_failed`, does not mark/regenerate the
+    session as verified, and leaves `forcedSetupPending` true until a retry
+    persists marker-clear + trust.** Alternative: preserve ordinary
+    `postVerify` behavior (let the current session through and log the failed
+    save), accepting that restart can present "first-time setup" again after
+    the page claimed completion.
 
 ---
 *Ruling record goes here once received, A22-b §9 style.*
