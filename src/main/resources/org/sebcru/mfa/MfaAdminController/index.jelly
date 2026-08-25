@@ -85,7 +85,7 @@
         <body>
           <div>
             <p class="backline">
-              <a class="back" href="/manage/">← Manage Jenkins</a>
+              <a class="back" href="${it.manageConsoleLink}">← Manage Jenkins</a>
             </p>
             <h1>403 — MFA administration</h1>
             <p>
@@ -316,7 +316,7 @@
     <body>
       <div class="card">
         <p class="backline">
-          <a class="back" href="/manage/configureSecurity/">← Security
+          <a class="back" href="${it.securityConfigLink}">← Security
               configuration</a>
         </p>
         <h1>MFA administration</h1>
