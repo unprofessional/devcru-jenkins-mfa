@@ -220,6 +220,19 @@ public class MfaController implements RootAction {
     return maskEmail(p.getRegisteredEmail());
   }
 
+  /**
+   * A24 — first-time setup signal (D10): the setup variant of this page
+   * renders ONLY when the session's own property carries the persisted
+   * {@code forcedSetupPending} marker. Deliberately NOT inferred from
+   * {@code lastVerifiedFactor} (its default 0 is indistinguishable from a
+   * real prior TOTP verification) nor from expired trust. Renders only for
+   * the session's OWN property (self-service endpoints; unchanged guard).
+   */
+  public boolean isForcedSetup() {
+    MfaUserProperty p = propertyOrNull();
+    return p != null && p.isForcedSetupPending();
+  }
+
   /** True when the email factor is enrolled (drives the "use email code" UI). */
   public boolean hasEmailFactor() {
     MfaUserProperty p = propertyOrNull();
@@ -423,6 +436,13 @@ public class MfaController implements RootAction {
       if (proven != null) {
         p.setLastVerifiedFactor(proven == Factor.EMAIL ? 1L : 0L);
       }
+      // A24 (D10/D16): a successful verification clears the forced-setup
+      // marker in the SAME save as the trust grant — "setup complete" either
+      // survives restart or is not claimed.
+      boolean wasForcedSetup = p.isForcedSetupPending();
+      if (wasForcedSetup) {
+        p.setForcedSetupPending(false);
+      }
       // Grant trust (floor applied inside TrustStore), regenerate the session
       // to kill any fixated id, and mark it verified so the Task 7 gate passes
       // it.
@@ -430,6 +450,19 @@ public class MfaController implements RootAction {
         trustStore.trust(p, cfg, now);
         u.save();
       } catch (IOException e) {
+        if (wasForcedSetup) {
+          // A24 / D16 (tightened for the forced branch): never claim setup
+          // completion over an unpersisted marker-clear. No verified session,
+          // no ok — the user retries; the marker stays pending until a retry
+          // persists. Logged loudly WITHOUT the code or address.
+          LOGGER.log(Level.SEVERE,
+              "MFA forced-setup verification succeeded but the marker-clear/trust "
+                  + "save FAILED for user " + u.getId()
+                  + " — setup remains pending; no verified session granted", e);
+          rateLimiter.clear(name);
+          write(rsp, VerifyOutcome.fail(VerifyOutcome.ERR_PERSISTENCE));
+          return;
+        }
         // The session attribute still authorises THIS session, so the user
         // is not stranded — but the trust + streak are lost on restart.
         // Loud, not silent (landmine fix 2026-08-22).
