@@ -36,17 +36,6 @@
     admin_verification_required: "Your session needs a freshly verified sign-in to perform this action: complete the one-time code step first, then reload this page.",
     admin_self_management_forbidden: "You cannot clear your own factors from the admin page: use the Security tab of your own account.",
     self_management_forbidden: "You cannot clear your own factors from the admin page: use the Security tab of your own account.",
-  function wire(btn) {
-    var op = btn.getAttribute("data-op");
-    var userId = btn.getAttribute("data-user-id");
-    var display = btn.getAttribute("data-display");
-    if (op === "forceEnrol") {
-      wireForceEnrol(btn, userId, display);
-      return;
-    }
-    btn.addEventListener("click", function () {
-      btn.disabled = true; // single-flight while the dialog is open
-      confirmTyped(op, userId, display, function (typed) {
     // A24 stable errors
     already_enrolled: "That user is already enrolled.",
     invalid_email: "Enter a valid mailbox address first.",
@@ -54,7 +43,8 @@
     user_disabled: "That account is disabled in the realm; it cannot be force-enrolled.",
     user_exempt: "That user is on the MFA exemption list; force-enrol does not apply.",
     persistence_failed: "The operation applied for this session, but saving it failed — try again, and if this repeats tell your admin (the change is lost on restart).",
-    server_error: "Something went wrong on the server. Try again."
+    server_error: "Something went wrong on the server. Try again.",
+    not_enrolled: "Nothing to clear — that user has no MFA factors registered."
   };
 
   function showResult(kind, text) {
