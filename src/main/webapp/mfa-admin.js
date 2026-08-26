@@ -142,6 +142,12 @@
     var op = btn.getAttribute("data-op");
     var userId = btn.getAttribute("data-user-id");
     var display = btn.getAttribute("data-display");
+    if (op === "forceEnrol") {
+      // A24: the force verb carries its own mailbox + consequence dialog;
+      // the generic typed-confirm below would drop the email parameter.
+      wireForceEnrol(btn, userId, display);
+      return;
+    }
     btn.addEventListener("click", function () {
       btn.disabled = true; // single-flight while the dialog is open
       confirmTyped(op, userId, display, function (typed) {
