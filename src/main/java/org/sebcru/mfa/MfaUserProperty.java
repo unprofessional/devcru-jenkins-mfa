@@ -78,6 +78,16 @@ public class MfaUserProperty extends UserProperty {
   private long codeIssuedAt;
   /** Epoch ms of the last code issue/resend (drives the resend cooldown). */
   private long lastResendAt;
+  /**
+   * A24 — non-secret marker: an ADMIN force-enrolled this user (email factor
+   * provisioned without the user's own enrolment act) and the user has not yet
+   * completed first-time verification. Cleared ONLY by a successful factor
+   * verification persisting (MfaController.postVerify, same save as the trust
+   * grant) or by the admin rollback ({@code clearFactors}). Never data-bound:
+   * config binding must not be able to set or clear an enforcement-adjacent
+   * state any more than it may write a TOTP seed.
+   */
+  private boolean forcedSetupPending;
 
   /**
    * No-arg constructor for XStream deserialization and direct construction.
@@ -250,6 +260,19 @@ public class MfaUserProperty extends UserProperty {
 
   public void setLastResendAt(long lastResendAt) {
     this.lastResendAt = lastResendAt;
+  }
+
+  // ---- A24: forced-setup marker (server-managed, NOT data-bound) ----
+
+  /** @return true while an admin-provisioned enrolment awaits first verification. */
+  public boolean isForcedSetupPending() {
+    return forcedSetupPending;
+  }
+
+  /** Server-managed: written by {@code MfaAdminController.forceEnrol} (set)
+   *  and {@code MfaController.postVerify} / admin clearFactors (clear) only. */
+  public void setForcedSetupPending(boolean forcedSetupPending) {
+    this.forcedSetupPending = forcedSetupPending;
   }
 
   // ---------------------------------------------------------------------

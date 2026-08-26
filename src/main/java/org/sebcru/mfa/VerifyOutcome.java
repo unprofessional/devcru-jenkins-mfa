@@ -79,6 +79,34 @@ public final class VerifyOutcome {
    * swallowed the IOException and answered ok).
    */
   public static final String ERR_PERSISTENCE = "persistence_failed";
+  /**
+   * A24: the named admin-verb target does not exist (never created by lookup
+   * — the read plane stays get-only).
+   */
+  public static final String ERR_USER_NOT_FOUND = "user_not_found";
+  /**
+   * A24: force-enrol refused because the target already carries a live,
+   * self-service-enrolled factor state (ordinary enrolment). Recovery and
+   * correction verbs keep their own contracts; force-enrol is not one.
+   */
+  public static final String ERR_ALREADY_ENROLLED = "already_enrolled";
+  /**
+   * A24: the supplied mailbox is blank or not a syntactically valid address.
+   * Blank is refused deliberately: writing a blank mailbox would silently
+   * un-enrol the user, which is clearFactors' single-writer job.
+   */
+  public static final String ERR_INVALID_EMAIL = "invalid_email";
+  /**
+   * A24 (D6): the target's realm state positively says DISABLED — visible in
+   * the roster with its indicator, but force-enrol is refused (a disabled
+   * account cannot complete setup, so enrolment would only strand it).
+   */
+  public static final String ERR_USER_DISABLED = "user_disabled";
+  /**
+   * A24 (D12): exempt users stay visible and labelled but their force action
+   * is disabled; A24 governs interactive browser access and says so honestly.
+   */
+  public static final String ERR_USER_EXEMPT = "user_exempt";
 
   private final boolean ok;
   private final String error;          // null on success
