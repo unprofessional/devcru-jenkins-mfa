@@ -36,9 +36,15 @@
     admin_verification_required: "Your session needs a freshly verified sign-in to perform this action: complete the one-time code step first, then reload this page.",
     admin_self_management_forbidden: "You cannot clear your own factors from the admin page: use the Security tab of your own account.",
     self_management_forbidden: "You cannot clear your own factors from the admin page: use the Security tab of your own account.",
-    not_enrolled: "That user is not enrolled (or is already clear).",
+    // A24 stable errors
+    already_enrolled: "That user is already enrolled.",
+    invalid_email: "Enter a valid mailbox address first.",
+    user_not_found: "That user no longer exists — reload the page.",
+    user_disabled: "That account is disabled in the realm; it cannot be force-enrolled.",
+    user_exempt: "That user is on the MFA exemption list; force-enrol does not apply.",
     persistence_failed: "The operation applied for this session, but saving it failed — try again, and if this repeats tell your admin (the change is lost on restart).",
-    server_error: "Something went wrong on the server. Try again."
+    server_error: "Something went wrong on the server. Try again.",
+    not_enrolled: "Nothing to clear — that user has no MFA factors registered."
   };
 
   function showResult(kind, text) {
@@ -136,6 +142,12 @@
     var op = btn.getAttribute("data-op");
     var userId = btn.getAttribute("data-user-id");
     var display = btn.getAttribute("data-display");
+    if (op === "forceEnrol") {
+      // A24: the force verb carries its own mailbox + consequence dialog;
+      // the generic typed-confirm below would drop the email parameter.
+      wireForceEnrol(btn, userId, display);
+      return;
+    }
     btn.addEventListener("click", function () {
       btn.disabled = true; // single-flight while the dialog is open
       confirmTyped(op, userId, display, function (typed) {
@@ -156,6 +168,105 @@
         });
       });
     });
+  }
+
+  // A24: force enrol. Reads the per-row mailbox input, demands type-in
+  // confirmation like every other verb (Ruling 5 — one rule for the whole
+  // surface), then POSTs userId/confirmUserId/email. The endpoint re-checks
+  // everything server-side; this is UX plus payload assembly.
+  function wireForceEnrol(btn, userId, display) {
+    var acctRow = btn.closest("tr");
+    if (acctRow && acctRow.getAttribute("data-acct-state") === "disabled") {
+      btn.disabled = true; // D6: positively disabled rows are not actionable
+      return;
+    }
+    btn.addEventListener("click", function () {
+      var mail = "";
+      var input = document.querySelector('input[data-mailbox-for="' + userId + '"]');
+      if (!input || !input.value.trim()) {
+        showResult("err", MESSAGES.invalid_email);
+        if (input) { input.focus(); }
+        return;
+      }
+      mail = input.value.trim();
+      btn.disabled = true;
+      confirmTypedForce(userId, display, mail, function (typed) {
+        post("forceEnrol", { userId: userId, confirmUserId: typed, email: mail })
+          .then(function (res) {
+            if (res.ok) {
+              showResult("ok", "Force enrol recorded for " + display
+                + ". They must verify at their next login.");
+              window.location.reload();
+            } else {
+              showResult("err", MESSAGES[res.error] || MESSAGES.server_error);
+              btn.disabled = false;
+            }
+          });
+      });
+    });
+  }
+
+  // Same shape as confirmTyped but with the force-enrol consequence copy and
+  // the mailbox echoed in the dialog body.
+  function confirmTypedForce(userId, display, email, onConfirm) {
+    if (!veil) {
+      veil = document.createElement("div");
+      veil.className = "veil";
+      veil.style.display = "none";
+      document.body.appendChild(veil);
+    }
+    veil.style.display = "flex";
+    veil.innerHTML = "";
+    var dialog = document.createElement("div");
+    dialog.className = "dialog";
+    var h = document.createElement("h2");
+    h.textContent = "Force-enrol " + display + "?";
+    var p = document.createElement("p");
+    p.textContent = userId + " will be required to complete MFA setup at their"
+      + " next login. A code will be sent to " + email + "; nothing is verified"
+      + " until THEY prove it. Type the user id to confirm.";
+    var input = document.createElement("input");
+    input.type = "text";
+    input.autocomplete = "off";
+    input.autocapitalize = "none";
+    input.spellcheck = false;
+    input.placeholder = "type user id: " + userId;
+    var row = document.createElement("div");
+    row.className = "row";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn";
+    cancel.textContent = "Cancel";
+    var go = document.createElement("button");
+    go.type = "button";
+    go.className = "btn btn-danger";
+    go.textContent = "Confirm";
+    go.disabled = true;
+    row.appendChild(cancel);
+    row.appendChild(go);
+    dialog.appendChild(h);
+    dialog.appendChild(p);
+    dialog.appendChild(input);
+    dialog.appendChild(row);
+    veil.appendChild(dialog);
+    input.focus();
+    input.oninput = function () { go.disabled = (input.value !== userId); };
+    cancel.onclick = close;
+    go.onclick = function () {
+      if (input.value !== userId) { return; }
+      close();
+      onConfirm(userId);
+    };
+    input.onkeydown = function (e) {
+      if (e.key === "Enter") { go.onclick(); }
+      if (e.key === "Escape") { close(); }
+    };
+    veil.onclick = function (e) { if (e.target === veil) { close(); } };
+    function close() {
+      veil.style.display = "none";
+      input.oninput = null;
+      input.onkeydown = null;
+    }
   }
 
   var buttons = document.querySelectorAll("button[data-op]");

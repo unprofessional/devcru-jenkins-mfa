@@ -599,6 +599,82 @@ class MfaAdminIT {
   }
 
   // ==================================================================
+  // A24 review fix — setup-pending recovery: the admin can clear a
+  //   stranded pre-verify forced enrolment.
+  // ==================================================================
+
+  /**
+   * WHAT — the setup-pending recovery path (A24 review Medium-2): a user
+   * force-enrolled but NOT yet verified (forcedSetupPending marker set,
+   * mailbox written, no verification) renders in the SETUP-PENDING slice
+   * WITH a clearFactors action (same typed-id confirmation UX as the
+   * enrolled roster), and POSTing clearFactors on them succeeds — wiping
+   * BOTH the marker and the provisioned factor in one save (D8) — so a
+   * forced user who loses mailbox access before verifying is never
+   * stranded under REQUIRED with no recovery path.
+   *
+   * <pre>
+   * GIVEN  HPSR + FCOL; "victim" SETUP_PENDING (registered mail + marker);
+   *        "admin" enrolled + mail, TOTP-verified this session
+   * WHEN   the admin GETs the roster -> victim appears under Setup pending
+   *        AND carries a data-op="clearFactors" action button
+   * WHEN   POST clearFactors?victim  -> 200 ok=true; marker false, mailbox
+   *        null, no live factor (fully unenrolled — D8's single-save wipe)
+   * THEN   a re-render no longer lists the victim anywhere
+   * </pre>
+   *
+   * WHY — before this fix the setup-pending table had NO actions column:
+   * clearFactors was unreachable from the UI for exactly the users most
+   * likely to need it (they cannot verify, so they cannot reach any self-
+   * service path). The endpoint already accepted them (isEnrolled is true
+   * once the forced email lands); only the surface was blind. This pin
+   * keeps the recovery path visible AND functional.
+   */
+  @Test
+  void setupPendingUserHasClearFactorsRecoveryPath(JenkinsRule rule) throws Exception {
+    ensureRealm(rule);
+    User victim = User.getById("victim", true);
+    MfaUserProperty vp = new MfaUserProperty();
+    vp.setRegisteredEmail("victim.example");
+    vp.setForcedSetupPending(true);
+    victim.addProperty(vp);
+    victim.save();
+    User admin = enroll(rule, "admin", ADMIN_PW, "KRSXG5CTMVRXEZLU");
+    admin.getProperty(MfaUserProperty.class).setRegisteredEmail("admin.example");
+    admin.save();
+
+    JenkinsRule.WebClient c = rule.createWebClient();
+    c.login("admin", ADMIN_PW);
+    verifyTotp(c, rule, "admin", "KRSXG5CTMVRXEZLU");
+
+    // (a) The page renders the setup-pending row WITH its recovery action.
+    String page = pageHtml(c, rule);
+    assertTrue(page.contains("victim"),
+        "the setup-pending roster must list the pending victim: " + page);
+    assertTrue(page.contains("data-op=\"clearFactors\""),
+        "a setup-pending user must expose the clearFactors recovery action: " + page);
+
+    // (b) The verb works: one save wipes marker + mailbox + factor state.
+    JSONObject clear = postAdmin(rule, c, "clearFactors", victim.getId(), 200);
+    assertTrue(clear.optBoolean("ok"),
+        "clearFactors must succeed on a setup-pending target: " + clear);
+    MfaUserProperty after = victim.getProperty(MfaUserProperty.class);
+    assertFalse(after.isForcedSetupPending(),
+        "the clear must remove the forced-setup marker (D8)");
+    assertNull(after.getRegisteredEmail(),
+        "the clear must remove the provisioned mailbox");
+    assertFalse(after.isMfaEnabled(),
+        "the clear must leave the victim fully unenrolled");
+
+    // (c) The re-rendered roster has an EMPTY setup-pending slice — the
+    // recovered victim left it (they may legitimately appear in the visible
+    // NOT-ENROLLED complement under REQUIRED; what must be gone is pending).
+    String pageAfter = pageHtml(c, rule);
+    assertTrue(pageAfter.contains("No users are waiting to finish setup."),
+        "the setup-pending slice must be empty after the clear: " + pageAfter);
+  }
+
+  // ==================================================================
   // Case 6 — the restart-survival leg (spec §7 case 3 + §10): the
   //   credential-clear's persistence round-trip. The clear is proven at the
   //   seam (leg 5 + AdminManageAllowedTest byte-for-byte) and target.save()
