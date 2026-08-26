@@ -657,13 +657,17 @@ the full deviation record.
   leaving both buttons dead. The URL is now rooted at Stapler's context and
   the rendered wire shape is pinned red→green in `MfaAdminIT`.
 
-- **A24 — force-enrol view (Ruling 4's "for now" companion).** When an admin
-  enforces MFA fleet-wide (policy `REQUIRED` + every user enrolled) the
-  enrolled-only roster at `/mfaAdmin` goes empty, but the admin still needs a
-  list of WHO to enrol: the complement view (unenrolled users, with a
-  per-row enrol nudge). Reuses the roster row list inverted on
-  `isMfaEnabled()`; ruled "for now" alongside A22-b, tracked here so the
-  empty-roster state is expected and not read as a defect.
+- **A24 — force-enrol view (Ruling 4's "for now" companion). RESOLVED
+  (2026-08-25, `a24-spec-delta`):** the complement view, the third
+  `forceEnrol` verb (typed-id confirm, email-only provisioning +
+  `forcedSetupPending` marker, obligation-never-proof), and the first-time
+  `/mfa` setup variant all landed per
+  `docs/todo/2026-08-25-A24-force-enrol-spec-delta.md` (all §9 rulings AS
+  RECOMMENDED). Remaining from that spec: the real-browser acceptance walk on
+  `qwen3.8:27b-mtp-q8_0` and dedicated booted IT legs — tracked in the spec's
+  §7 checklist. Original entry: when an admin enforces MFA fleet-wide the
+  enrolled-only roster went empty; expected, but useless for finding WHO to
+  enrol.
 - **Public-release readiness:** license + LICENSE file, `Jenkinsfile`
   (`buildPlugin()`), public repo, pom metadata — full gap list, process,
   and ongoing obligations in

@@ -198,11 +198,10 @@ class AdminManageAllowedTest {
   void adminRowMasksMailboxAndExposesFactorColumns() {
     MfaUserProperty p = new MfaUserProperty();
     p.setTotpSecret(Secret.fromString("JBSWY3DPEHPK3PXP"));
-    // Deliberately NO registered email: TOTP-only user. The row's mailbox
-    // slot therefore receives getRosterRows' exact placeholder for the
-    // no-mailbox case — the masked form of "(no mailbox)", which is
-    // "***" per maskEmail's no-@ rule; the privacy pin still bites, so we
-    // also carry a second, real mailbox through to prove the masking.
+    // Deliberately NO registered email: TOTP-only user. Since A24 the roster
+    // renders the literal "(no mailbox)" placeholder for this shape at the
+    // rowsOf layer; this pin builds the row directly to prove the privacy
+    // contract on a REAL mailbox (masking happens before row construction).
     boolean trustLive = true;
 
     // getRosterRows masks at the source; mirror that exact step here (both
@@ -211,7 +210,8 @@ class AdminManageAllowedTest {
     String maskedReal = MfaController.maskEmail("mads@devcru.org");
     MfaAdminController.AdminRow row = new MfaAdminController.AdminRow(
         "mads", "Mads", maskedReal,
-        p.hasTotpFactor(), p.hasEmailFactor(), trustLive);
+        p.hasTotpFactor(), p.hasEmailFactor(), trustLive,
+        "ENROLLED", "unknown");
 
     // The masked form is what the row carries, and it is the documented shape.
     assertEquals("m***@devcru.org", row.getMaskedMail(),

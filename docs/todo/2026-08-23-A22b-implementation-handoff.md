@@ -1,17 +1,23 @@
-# A22-b admin factor-management — handoff (v5, 2026-08-24, PRODUCTION FEEDBACK ROUND)
+# A22-b admin factor-management — handoff (v6, 2026-08-24, PIPELINE GREEN, D ROUND NEXT)
 
 > **§1 progress:** §1-A DONE (`14dc5d2`), §1-B DONE (`e5e68da`, theming fix +
 > `MfaAdminIndexThemeTest` pin + browser proof). Both merged to `develop` as
 > PR #20 (`26c1e7d`) and **DEPLOYED to production `jenkins.devcru.org`
 > 2026-08-24 ~01:10 ET** (smoke green; deploy record in Moldy's memory, not
-> here). **TOP PRIORITY: §1-PIPELINE — get the self-deploy pipeline green
-> (mads's call 2026-08-24 ~03:00 ET; Moldy diagnosed + pre-fixed, you verify
-> and iterate). THEN §1-D — the production feedback round from mads's live
-> walk. §1-C (A24) stays last** — separate spec-first PR awaiting mads's rulings.
+> here). **§1-PIPELINE DONE 2026-08-24 (build #6, ~18:26 UTC): build #5
+> died on a dash-incompatible `set -o pipefail` in Snapshot (the agent's sh
+> is dash); fixed + regressed-pinned in `88a0185` (dash-native stages,
+> explicit snapshot integrity gate, `JenkinsfilePipelineTest` which caught a
+> second latent dash bug in Smoke on first run). Build #6 fired by the real
+> merge took the FULL deploy path — snapshot with integrity gate (59,767
+> entries), install, controller restart, **durability resume**, SMOKE GREEN —
+> the untested leg is now proven. Repro clone deleted.** **NEXT: §1-D — the
+> production feedback round from mads's live walk. §1-C (A24) stays last** —
+> separate spec-first PR awaiting mads's rulings.
 
-Written for Sebastian (next session). **A22-b is APPROVED and is being merged
-to `develop` by mads.** This handoff now hands you the POST-MERGE next steps
-(§1), including cleanup from this PR. Read §0 (status + one correction you must
+Written for Sebastian (next session; this copy updated 2026-08-24 after
+the pipeline went green — §1-A, §1-B, §1-PIPELINE are DONE; the remaining
+work is §1-D, then §1-C last). Read §0 (status + the corrections you must
 know) and §1 (what to do next) first. §2–§5 are reference; §6 is standing
 instructions. **Do not re-do the resolved-defect record (§5).**
 
@@ -57,12 +63,31 @@ light theme yet. That is task §1-B below. Do not repeat the overclaim.
 
 ## 1. NEXT TASKS (post-merge, branch from `develop`)
 
-Order: **§1-PIPELINE first (before all cleanup)**, then §1-D, then §1-C.
+Order: ~~§1-PIPELINE (done 2026-08-24)~~ → **now: §1-D** → §1-C last.
 Each task is its own commit; no PR without mads.
 
-### §1-PIPELINE — TOP PRIORITY — self-deploy pipeline: verify + iterate to green (before §1-D)
+### §1-PIPELINE — self-deploy pipeline green (DONE 2026-08-24, build #6)
 
-**Why you:** mads's call (2026-08-24 ~03:00 ET) — this is a back-and-forth
+**Executed 2026-08-24 (Sebastian; model qwen3.8:27b-mtp-q8_0 confirmed per
+Correction 1 before starting):** the pipeline was NOT green at handoff —
+build #5 (fired by mads's merge of PR #25, newer than the four documented
+failures below) died in Snapshot on a dash-incompatible `set -o pipefail`
+(the agent's `/bin/sh` is dash). Fixed in `88a0185` on `develop`:
+dash-native Snapshot stage + an explicit artifact-integrity gate
+(`gzip -t`, `tar tzf` entry-count floor, sha256 sidecar) replacing pipefail's
+role (strictly stronger — it catches a truncated-but-valid gzip the pipe
+would have masked), a Smoke-stage dash backslash fix, and
+`JenkinsfilePipelineTest`, which scans every `sh` body for bashisms +
+`dash -n`-parses them and caught a SECOND latent dash defect (a doubled `\`
+where a line-continuation belongs) RED on its first run, before any live
+merge. mads merged; **build #6 (18:25 UTC) took the FULL deploy path —
+snapshot (59,767 entries, gate passed) → install → controller restart →
+durability resume ("Resuming build at Mon Aug 24 18:26:29 UTC 2026 after
+Jenkins restart") → Wait-for-ready → SMOKE GREEN — and closed this
+task.** Repro clone deleted per the DoD. CI mirror `mvn -o clean verify`:
+BUILD SUCCESS, 120 tests, SpotBugs 0.
+
+**Why you (historical):** mads's call (2026-08-24 ~03:00 ET) — this is a back-and-forth
 troubleshooting job. Moldy did the diagnosis and applied the fixes; you own
 verification and any remaining iteration until the pipeline is green.
 
@@ -77,7 +102,7 @@ the Jenkins credentials store. Agent: label `yharnam` — runs as user
 `jenkins` (uid 996, workDir `/home/jenkins/agent`), NOT as hunter;
 `/home/hunter` is 750 and unreachable from CI.
 
-**Build history — all four failures root-caused. Do not re-diagnose:**
+**Build history — five failures root-caused, #6 green. Do not re-diagnose:**
 
 1. **#1** `Unable to find Jenkinsfile from git` — lightweight checkout was ON
    (fetches only the Jenkinsfile via GitHub API; fails, and wrong shape here
@@ -102,6 +127,17 @@ the Jenkins credentials store. Agent: label `yharnam` — runs as user
    hunter's Temurin `jdk-21.0.12+8` (real javac + 10.7MB ct.sym) copied
    world-readable to `/opt/jdk-21.0.12+8`; Jenkinsfile sets `JAVA_HOME` +
    PATHs (develop commit `4113c60`).
+5. **#5** Snapshot stage: `set: Illegal option -o pipefail` — `set -o pipefail`
+   is a bashism; the agent's durable-task `sh` is `/bin/sh` (dash), which
+   exits 2 before the ssh ever ran. Toolchain/Verify/Compare had all passed.
+   Fixed with the dash-native rewrite + explicit integrity gate in `88a0185`.
+6. **#6 GREEN** (2026-08-24 18:25 UTC) — fired by the real merge, FULL deploy
+   path: snapshot (59,767 entries, integrity gate passed) → Verify → Compare
+   → install → controller restart → **durability resume** ("Resuming build
+   at Mon Aug 24 18:26:29 UTC 2026 after Jenkins restart") → SMOKE GREEN
+   (`plugin: devcru-mfa 1.0.0 active`, admin surface + light theme,
+   `mfa-admin.js` 200, gate page 200). BUILD SUCCESS in ~4 m. This is the
+   acceptance run — the restart→resume leg is DONE, not a prediction.
 
 **Provisioned CI environment (all verified working as user `jenkins`):**
 
@@ -112,9 +148,9 @@ the Jenkins credentials store. Agent: label `yharnam` — runs as user
   ranger@192.168.7.35 `authorized_keys` (ssh round-trip verified)
 - `/home/jenkins/backups/jenkins-snapshots` — pre-deploy snapshot dir
   (keep-latest-2 + sha256 sidecars)
-- Repro clone left at `/home/jenkins/repro-mfa` (master): `sudo -u jenkins`
-  `mvn -o -B clean verify` there = BUILD SUCCESS 1:55, SpotBugs 0, as user
-  jenkins. Delete it once the pipeline is green.
+- Repro clone `/home/jenkins/repro-mfa` — was the local full-repro build
+  (BUILD SUCCESS, SpotBugs 0, as user jenkins). **DELETED 2026-08-24** once
+  the pipeline was green, per the task's own instruction. Do not look for it.
 
 **Your iteration loop:**
 
@@ -122,10 +158,13 @@ the Jenkins credentials store. Agent: label `yharnam` — runs as user
   Fix → commit to develop → ask mads to merge → the webhook fires the next
   build automatically. Do not trigger manual builds as a substitute — the
   merge IS the trigger under test.
-- Watch consoles: `http://192.168.7.35:8080/job/devcru-jenkins-mfa/<N>/console`
-  — auth `rally` + API key from Infisical `agent-infra` (secret
-  `JENKINS_API_KEY`; universal-auth bootstrap per your own notes; pattern
-  `curl -s -u "rally:$KEY" <url>`).
+- Watch consoles: via the **deploy-key route**, NOT the API — `JENKINS_API_KEY`
+  is NOT in this Infisical identity's tree (the `agent-infra` path 404s; do not
+  waste time looking again). Proven route: agent-host → `sudo -u jenkins` → ssh
+  `ranger` on the controller → `sudo cat /var/lib/jenkins/jobs/devcru-jenkins-
+  mfa/builds/<N>/log` there. Log lines are mostly `ha:<base64>`-prefixed;
+  triage with `sed 's/^ha:.*==//'` to keep the plain lines. (UI route if you
+  have a browser session: `…/job/devcru-jenkins-mfa/<N>/console`.)
 - Repro build-stage issues locally: `sudo -u jenkins` with
   `JAVA_HOME=/opt/jdk-21.0.12+8` and PATH
   `/opt/jdk-21.0.12+8/bin:/opt/apache-maven-3.9.11/bin`. Sudo password:
@@ -155,12 +194,10 @@ the Jenkins credentials store. Agent: label `yharnam` — runs as user
 - Never self-update plugins the pipeline itself depends on (workflow-*, git,
   durable-task, github). `devcru-mfa` is safe: no pipeline step consumes it.
 
-**The untested leg:** restart→resume durability. The first run with the JDK
-fix is expected to take the FULL deploy path (bits differ, see above) — it
-will restart the controller mid-build and must resume afterwards and run
-Wait-for-ready + Smoke. If it does not resume, THAT is the defect to solve
-next; capture the build's stage view + controller boot log around the
-restart timestamp before changing anything.
+**The untested leg (RESOLVED by build #6):** restart→resume durability,
+proven green on the full deploy path. If a FUTURE run ever fails to resume,
+that is the defect to solve; capture the build's stage view + controller boot
+log around the restart timestamp before changing anything.
 
 **Definition of done:** one end-to-end green run fired by a real
 `develop`→`master` merge — either path counts (skip+smoke, or full
@@ -259,7 +296,14 @@ value was actually applied.
 
 §1-C (A24) deliberately untouched, pending its own spec-first PR.
 
-### §1-D — Production feedback round (mads's live walk, 2026-08-24) — after §1-PIPELINE
+### §1-D — Production feedback round (mads's live walk, 2026-08-24) — **CURRENT TASK**
+
+**READY TO START (2026-08-24).** §1-PIPELINE is green and closed — this is
+up next. One commit per task, branch from `develop`. Suggested order D1 → D2
+→ D3. D1 was re-confirmed against raw bytes this session before the reset:
+on `develop` the `manageFactorsLink` entry is still glued to the tail of
+`rememberFor.hint` (one line, missing newline) — verify against disk when
+you start, but expect the same mangle.
 
 mads walked the deployed surface in a real browser (log in → MFA →
 `/manage/configureSecurity/` → the "Open" link → `/mfaAdmin/`). Two defects,

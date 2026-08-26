@@ -65,6 +65,12 @@
             }
             h1 { font-size: 18px; margin: 0 0 8px 0; }
             p { font-size: 14px; color: #9aa4ae; margin: 0; }
+            .back {
+              color: #6fb0d3;
+              text-decoration: none;
+              font-size: 13px;
+            }
+            .back:hover { text-decoration: underline; }
             code { font-family: monospace; }
             @media (prefers-color-scheme: light) {
               body {
@@ -72,11 +78,15 @@
                 color: #1f2328;
               }
               p { color: #767676; }
+              .back { color: #1a5dab; }
             }
           </style>
         </head>
         <body>
           <div>
+            <p class="backline">
+              <a class="back" href="${it.manageConsoleLink}">← Manage Jenkins</a>
+            </p>
             <h1>403 — MFA administration</h1>
             <p>
               You do not have permission to view this page
@@ -167,6 +177,17 @@
           padding: 28px 0;
           font-size: 14px;
         }
+        /* D2 (2026-08-24): back link — the page was an island; this is the
+           route off it. Colour is explicit per scheme below (round-7 /
+           rule-12: never inherit a neighbouring rule's colour); target is
+           ABSOLUTE per the context-safe script-URL precedent. */
+        .back {
+          color: #6fb0d3;
+          font-size: 13px;
+          text-decoration: none;
+        }
+        .back:hover { text-decoration: underline; }
+        .backline { margin: 0 0 14px 0; }
         /* Explicit button colours in BOTH schemes (postmortem round 7:
            token names guessed white-on-white — the --btn-secondary-*
            family is declared by core's skin, but this is a standalone
@@ -232,6 +253,31 @@
         .result-ok { background: #1f3a2d; color: #6fd39a; border: 1px solid #2c5a43; }
         .result-err { background: #3a1f1f; color: #e88; border: 1px solid #5a2c2c; }
         noscript { color: #e88; font-size: 13px; display: block; margin-top: 12px; }
+        /* A24: rollout sections, counts, account labels, force-enrol controls */
+        .section-h {
+          font-size: 15px; font-weight: 600; color: #e8eaed;
+          margin: 26px 0 8px 0;
+        }
+        .count-pill {
+          display: inline-block; min-width: 22px; text-align: center;
+          background: #232a30; border: 1px solid #3a444d; border-radius: 10px;
+          padding: 1px 8px; font-size: 12px; color: #9aa4ae;
+        }
+        .acct {
+          display: inline-block; border-radius: 4px; padding: 1px 7px;
+          font-size: 11px; font-weight: 600; text-transform: uppercase;
+        }
+        .acct-active { background: #1f3a2d; color: #6fd39a; }
+        .acct-disabled { background: #3a1f1f; color: #e88; }
+        .acct-unknown { background: #2a333c; color: #9aa4ae; }
+        .mailbox {
+          padding: 6px 8px; border-radius: 6px; border: 1px solid #3a444d;
+          background: #101418; color: #e8eaed; font-size: 12px; width: 180px;
+        }
+        .btn-force {
+          border: 1px solid #2c4a5a; background: #1f2e3a; color: #6fb0d3;
+        }
+        .btn-force:hover { background: #26404f; }
 
         /* ============ LIGHT THEME (§1-B, 2026-08-23) ============
            The base rules above are the DARK theme. This block re-paints
@@ -258,6 +304,7 @@
           th { color: #767676; border-bottom: 1px solid #d0d7de; }
           td { border-bottom: 1px solid #eaeef2; }
           .none { color: #8c959f; }
+          .back { color: #1a5dab; }
           .factor-totp { background: #e6f4ea; color: #1e7e34; border: 1px solid #a8d5b5; }
           .factor-email { background: #e7f0fa; color: #1a5dab; border: 1px solid #a3c2e0; }
           .btn {
@@ -288,18 +335,35 @@
           .result-ok { background: #e6f4ea; color: #1e7e34; border: 1px solid #a8d5b5; }
           .result-err { background: #fde9e8; color: #b3261e; border: 1px solid #f3b0ad; }
           noscript { color: #b3261e; }
+          .section-h { color: #1f2328; }
+          .count-pill { background: #eaeef2; border-color: #d0d7de; color: #767676; }
+          .acct-active { background: #e6f4ea; color: #1e7e34; }
+          .acct-disabled { background: #fde9e8; color: #b3261e; }
+          .acct-unknown { background: #eef1f4; color: #767676; }
+          .mailbox { border-color: #d0d7de; background: #ffffff; color: #1f2328; }
+          .btn-force { border-color: #a3c2e0; background: #e7f0fa; color: #1a5dab; }
+          .btn-force:hover { background: #d8e7f7; }
         }
       </style>
     </head>
     <body>
       <div class="card">
+        <p class="backline">
+          <a class="back" href="${it.securityConfigLink}">← Security
+              configuration</a>
+        </p>
         <h1>MFA administration</h1>
         <p class="sub">
-          Enrolled users. Clearing factors is the lockout recovery (the user can
+          Rollout views. Clearing factors is the lockout recovery (the user can
           self-enrol again); revoking trust forces a re-verify at their next
-          login. Both verbs require typing the target's user id.
+          login; force enrol writes an email factor and REQUIRES the user to
+          verify at their next login — it never verifies them. Every verb
+          requires typing the target's user id.
         </p>
         <noscript>JavaScript is required to perform factor operations; the roster is shown read-only.</noscript>
+
+        <!-- ============ ENROLLED (recovery roster) ============ -->
+        <h2 class="section-h">Enrolled <span class="count-pill">${it.enrolledCount}</span></h2>
         <j:choose>
           <j:when test="${it.rosterRows.isEmpty()}">
             <div class="empty">No enrolled users.</div>
@@ -308,27 +372,19 @@
             <table id="adminRoster">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Delivery address</th>
-                  <th>Factors</th>
-                  <th>Actions</th>
+                  <th>User</th><th>Account</th><th>Delivery address</th><th>Factors</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 <j:forEach var="row" items="${it.rosterRows}">
                   <tr data-user-id="${row.userId}" data-display="${row.displayName}">
                     <td class="mono"><j:out value="${row.userId}"/></td>
+                    <td><span class="acct acct-${row.accountState}"><j:out value="${row.accountState}"/></span></td>
                     <td class="mono"><j:out value="${row.maskedMail}"/></td>
                     <td>
-                      <j:if test="${row.isTotp()}">
-                        <span class="factor factor-totp">TOTP</span>
-                      </j:if>
-                      <j:if test="${row.isEmail()}">
-                        <span class="factor factor-email">EMAIL</span>
-                      </j:if>
-                      <j:if test="${!row.isTotp() and !row.isEmail()}">
-                        <span class="none">none</span>
-                      </j:if>
+                      <j:if test="${row.isTotp()}"><span class="factor factor-totp">TOTP</span></j:if>
+                      <j:if test="${row.isEmail()}"><span class="factor factor-email">EMAIL</span></j:if>
+                      <j:if test="${!row.isTotp() and !row.isEmail()}"><span class="none">none</span></j:if>
                     </td>
                     <td>
                       <button type="button" class="btn btn-danger"
@@ -346,6 +402,86 @@
             </table>
           </j:otherwise>
         </j:choose>
+
+        <!-- ============ SETUP PENDING ============ -->
+        <h2 class="section-h">Setup pending <span class="count-pill">${it.setupPendingCount}</span></h2>
+        <j:choose>
+          <j:when test="${it.setupPendingRows.isEmpty()}">
+            <div class="empty">No users are waiting to finish setup.</div>
+          </j:when>
+          <j:otherwise>
+            <table class="rosterTable">
+              <thead>
+                <tr><th>User</th><th>Account</th><th>Delivery address</th><th>Factors</th><th>Actions</th></tr>
+              </thead>
+              <tbody>
+                <j:forEach var="row" items="${it.setupPendingRows}">
+                  <tr>
+                    <td class="mono"><j:out value="${row.userId}"/></td>
+                    <td><span class="acct acct-${row.accountState}"><j:out value="${row.accountState}"/></span></td>
+                    <td class="mono"><j:out value="${row.maskedMail}"/></td>
+                    <td>
+                      <j:if test="${row.isTotp()}"><span class="factor factor-totp">TOTP</span></j:if>
+                      <j:if test="${row.isEmail()}"><span class="factor factor-email">EMAIL</span></j:if>
+                      <j:if test="${!row.isTotp() and !row.isEmail()}"><span class="none">none</span></j:if>
+                    </td>
+                    <td>
+                      <!-- A24 review fix: a setup-pending user carries a live
+                           forced email factor but has NOT verified — if they
+                           lose mailbox access pre-verify they are stranded
+                           under REQUIRED. clearFactors (which also clears the
+                           marker, D8) is their recovery path; same typed-id
+                           confirmation UX as the enrolled roster. -->
+                      <button type="button" class="btn btn-danger"
+                              data-op="clearFactors"
+                              data-user-id="${row.userId}"
+                              data-display="${row.displayName}">Clear factors</button>
+                    </td>
+                  </tr>
+                </j:forEach>
+              </tbody>
+            </table>
+          </j:otherwise>
+        </j:choose>
+
+        <!-- ============ NOT ENROLLED (REQUIRED only, D9) ============ -->
+        <j:if test="${it.complementVisible}">
+          <h2 class="section-h">Not enrolled <span class="count-pill">${it.notEnrolledCount}</span></h2>
+          <p class="sub">Force enrol provisions an EMAIL factor from a mailbox you enter.
+            The user must verify a code sent there before Jenkins lets them in.</p>
+          <j:choose>
+            <j:when test="${it.notEnrolledRows.isEmpty()}">
+              <div class="empty">Everyone is enrolled or pending — nothing to force.</div>
+            </j:when>
+            <j:otherwise>
+              <table class="rosterTable">
+                <thead>
+                  <tr><th>User</th><th>Account</th><th>Delivery address</th><th>Factors</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  <j:forEach var="row" items="${it.notEnrolledRows}">
+                    <tr data-user-id="${row.userId}" data-display="${row.displayName}"
+                        data-acct-state="${row.accountState}">
+                      <td class="mono"><j:out value="${row.userId}"/></td>
+                      <td><span class="acct acct-${row.accountState}"><j:out value="${row.accountState}"/></span></td>
+                      <td class="mono"><j:out value="${row.maskedMail}"/></td>
+                      <td><span class="none">none</span></td>
+                      <td>
+                        <input type="text" class="mailbox" placeholder="name@example.com"
+                               autocomplete="off" spellcheck="false"
+                               data-mailbox-for="${row.userId}"/>
+                        <button type="button" class="btn btn-force"
+                                data-op="forceEnrol"
+                                data-user-id="${row.userId}"
+                                data-display="${row.displayName}">Force enrol</button>
+                      </td>
+                    </tr>
+                  </j:forEach>
+                </tbody>
+              </table>
+            </j:otherwise>
+          </j:choose>
+        </j:if>
         <div id="adminResult" style="display:none"/>
       </div>
       <!-- JS config via data attributes (the house pattern from mfa-section.js):
