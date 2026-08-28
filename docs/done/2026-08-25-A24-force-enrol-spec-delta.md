@@ -10,10 +10,11 @@
 > binding requirement — "walked ... **on `qwen3.8:27b-mtp-q8_0`,
 > stated exactly in the report**" — was not met: the walk's terminal
 > marker self-reports `ox-alpha model via OpenClaw subagent CDP walk`,
-> i.e. a different harness/model. The full §7 booted IT matrix
+> i.e. a different harness/model. **Deviation
+> OVERRIDE-ACCEPTED by mads (2026-08-28): the work was needed sooner; no qwen
+> re-walk; deviation closed.** The full §7 booted IT matrix
 > (journey-with-restart, guard pins, setup-does-not-bypass, policy
-> edges) also remains unimplemented. A qwen re-walk + remaining IT
-> legs stand unless mads rules the deviation acceptable. Retained as
+> edges) remains unimplemented — open, independent of the override. Retained as
 > spec of record for the `forceEnrol` verb, the complement view, and
 > the `/mfa` setup variant.
 # (original) # A24 spec delta — force-enrol view + third verb + first-time MFA setup
