@@ -81,7 +81,7 @@ genuinely different (the page previously claimed both schemes but always
 painted the dark one — corrected in A22-b §1-B, 2026-08-23). The static
 action script is context-rooted, so the buttons also work when Jenkins is
 served beneath a prefix such as `/jenkins`. The spec and rulings:
-[`docs/todo/2026-08-23-A22b-admin-factor-management-spec.md`](docs/todo/2026-08-23-A22b-admin-factor-management-spec.md).
+[`docs/done/2026-08-23-A22b-admin-factor-management-spec.md`](docs/done/2026-08-23-A22b-admin-factor-management-spec.md).
 
 What follows documents the built system as it landed through Task 8.
 

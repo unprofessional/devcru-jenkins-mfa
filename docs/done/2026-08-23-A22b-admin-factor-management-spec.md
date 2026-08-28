@@ -1,4 +1,15 @@
-# A22-b spec — Admin management of other users' factors
+# ✅ DONE — A22-b spec of record (implemented, deployed, follow-on merged)
+
+> **STAMPED DONE (2026-08-28) and moved to `docs/done/`.** This spec
+> governed the A22-b build (2026-08-23, merged to `develop` as PR #18),
+> the §1-A/§1-B cleanup + theming round (PR #20, deployed to
+> `jenkins.devcru.org` 2026-08-24), and the §1-D production-feedback
+> round (PR #27, `d36fcfd`, 2026-08-26). Follow-on Ruling-4 ("for now")
+> work carried on in its own spec:
+> `docs/done/2026-08-25-A24-force-enrol-spec-delta.md`. Retained as spec
+> of record — do not re-litigate here; the live audit trail is
+> `docs/todo/TECH_DEBT.md` (A22-b entry + Resolved table).
+# (original) # A22-b spec — Admin management of other users' factors
 
 > **Status: RULINGS RECEIVED (mads, 2026-08-23) — implementing in this
 > branch. §9 resolved as below.**
