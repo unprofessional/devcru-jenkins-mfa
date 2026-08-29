@@ -13,8 +13,10 @@
 > i.e. a different harness/model. **Deviation
 > OVERRIDE-ACCEPTED by mads (2026-08-28): the work was needed sooner; no qwen
 > re-walk; deviation closed.** The full §7 booted IT matrix
-> (journey-with-restart, guard pins, setup-does-not-bypass, policy
-> edges) remains unimplemented — open, independent of the override. Retained as
+> (journey-with-restart, guard pins, setup-closed/idempotence, failure
+> honesty, policy/identity edges) LANDED 2026-08-28 in `f631503`
+> (`MfaAdminA24IT`, 5 legs / green); it found and fixed one D16
+> in-memory-rollback defect in `postVerify`. Retained as
 > spec of record for the `forceEnrol` verb, the complement view, and
 > the `/mfa` setup variant.
 # (original) # A24 spec delta — force-enrol view + third verb + first-time MFA setup
