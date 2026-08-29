@@ -432,6 +432,13 @@ public class MfaController implements RootAction {
       //    log; a shape that fell back to the other enrolled factor records
       //    the factor that verified, not the shape submitted). Both persist
       //    on the exact u.save() below — no extra round trip.
+      // D16 (A24): capture the pre-mutation state so the forced-setup
+      // failure branch below can ROLL BACK when u.save() cannot persist —
+      // in-memory and on-disk must agree, or the gate (which reads the
+      // in-memory property) admits what the disk says is still pending.
+      int preFailureStreak = p.getFailedAttemptStreak();
+      long preVerifyFactor = p.getLastVerifiedFactor();
+      long preVerifyTrustUntil = p.getTrustedUntilMs();
       p.setFailedAttemptStreak(0);
       if (proven != null) {
         p.setLastVerifiedFactor(proven == Factor.EMAIL ? 1L : 0L);
@@ -454,7 +461,16 @@ public class MfaController implements RootAction {
           // A24 / D16 (tightened for the forced branch): never claim setup
           // completion over an unpersisted marker-clear. No verified session,
           // no ok — the user retries; the marker stays pending until a retry
-          // persists. Logged loudly WITHOUT the code or address.
+          // persists. The in-memory success mutations (marker clear, trust
+          // grant, streak reset, proven-factor record) must be rolled back:
+          // the gate READS the in-memory property, and an un-rolled-back
+          // trust grant would admit a user whose setup is not on disk —
+          // memory and disk must agree on the honest (pending, untrusted)
+          // state. Logged loudly WITHOUT the code or address.
+          p.setForcedSetupPending(true);
+          p.setTrustedUntilMs(preVerifyTrustUntil);
+          p.setFailedAttemptStreak(preFailureStreak);
+          p.setLastVerifiedFactor(preVerifyFactor);
           LOGGER.log(Level.SEVERE,
               "MFA forced-setup verification succeeded but the marker-clear/trust "
                   + "save FAILED for user " + u.getId()
