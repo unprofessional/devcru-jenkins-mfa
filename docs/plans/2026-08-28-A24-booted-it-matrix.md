@@ -1,5 +1,24 @@
 # A24 §7 booted IT matrix — plan + breadth enumeration (2026-08-28)
 
+> **STATUS — LANDED 2026-08-28 (supersedes the open framing below).**
+> Executed as planned: `MfaAdminA24IT` (5 legs, 1,432 lines, BDD-documented)
+> GREEN — `mvn -o -B test -Dtest=MfaAdminA24IT` 5/5, 36.0s
+> (`/tmp/a24it-full3.log`, Finished 2026-08-28T20:05:54-04:00); full
+> CI-mirror `mvn -o -B clean verify` 149/149 green
+> (`/tmp/a24it-final-verify.log`, Finished 2026-08-28T20:09:35-04:00).
+> One red→green escalation, per this file's red→green policy: leg 4 (D16)
+> found a genuine product defect — `postVerify`'s forced-setup branch
+> cleared the marker + granted trust in memory BEFORE `u.save()` with no
+> rollback; fixed in the same commit (catch branch restores
+> marker/trust/streak/proven-factor before answering
+> `persistence_failed`). Committed `f631503` (matrix + fix) and `63ce631`
+> (docs), branch `a24-it-matrix` pushed to origin (head `63ce631`);
+> `develop` untouched, **no PR filed — awaiting mads's merge decision**.
+> Breadth slot 2's "Result: pending" below now reads: verified — logs
+> above. The "No production-code changes planned" sentence is superseded
+> by the D16 fix (the only production change; reported to mads, accepted
+> in-channel 2026-08-28).
+
 **Branch:** `a24-it-matrix` off `develop` (`7b8d7a3`). **Binding spec:**
 `docs/done/2026-08-25-A24-force-enrol-spec-delta.md` §7 items 4–10 (all
 rulings AS RECOMMENDED, 2026-08-25). **Model for the work + report:**
@@ -44,8 +63,9 @@ security seams do not move without sign-off).
    Chromium `:9222` untouched; this matrix is HTMLUnit-based (no headful
    browser) — the real-browser layer is the already-accepted A24 walk
    (mads override, 2026-08-28). *Probe:* each leg's first run; the full
-   matrix's last run is the CI-mirror verify. *Result:* pending (that is
-   the work).
+   matrix's last run is the CI-mirror verify. *Result:* verified —
+   `/tmp/a24it-full3.log` (5/5, 36.0s) + `/tmp/a24it-final-verify.log`
+   (149/149 clean verify, SpotBugs `check` + enforcer passed).
 3. **External consumers.** The wire JSON envelopes
    (`{ok,error:{stable strings}}` / `{ok,op:"forceEnrol"}`) are parsed by
    `mfa-admin.js` — the strictest consumer. *Probe:* legs assert the
