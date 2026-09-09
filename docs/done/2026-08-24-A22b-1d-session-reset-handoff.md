@@ -1,8 +1,21 @@
-# A22-b §1-D — session-reset handoff (2026-08-24)
+# ✅ DONE — A22-b §1-D handoff (open defect closed; all owed work delivered)
+
+> **STAMPED DONE (2026-08-28) and moved to `docs/done/`.** Every open
+> state in this handoff is since closed: the config-denied OPEN DEFECT
+> was resolved by `aabdba7` (walk fixture walks core's `impliedBy`
+> graph — the §5 second branch, as predicted); the full real-browser
+> acceptance walk landed `484c0e6` (+ review cleanup `d36fcfd`); the
+> §7 step-8 two-commit split (walk script + fixture repair) landed as
+> `aabdba7` / `484c0e6`; the branch was pushed and merged as PR #27
+> (merge `eaeabb0`, 2026-08-26). Retained as execution-state audit
+> trail, including the verification-method record in §4 (the
+> Groovy-scriptText thread-context pitfall) and the run-history table
+> in §6. The "NOT RUN" verify and "NOT pushed" lines are historical.
+# (original) # A22-b §1-D — session-reset handoff (2026-08-24)
 
 **Supersedes:** all in-chat context from previous sessions on this task,
 including the §1-D execution state implied by
-`docs/todo/2026-08-23-A22b-implementation-handoff.md` (that file remains the
+`docs/done/2026-08-23-A22b-implementation-handoff.md` (that file remains the
 **spec of record** for D1/D2/D3 — do not overwrite it). This file is the
 execution-state handoff written at mads's stop order for a session reset.
 Model for the report: `qwen3.8:27b-mtp-q8_0`.

@@ -1,4 +1,17 @@
-# A22-b admin factor-management — handoff (v6, 2026-08-24, PIPELINE GREEN, D ROUND NEXT)
+# ✅ DONE — A22-b handoff v6 (all §1 tasks closed; execution state superseded)
+
+> **STAMPED DONE (2026-08-28) and moved to `docs/done/`.** Every §1 task
+> this handoff tracks is closed: §1-A + §1-B merged as PR #20 and
+> deployed (2026-08-24); §1-PIPELINE green (build #6, 2026-08-24);
+> §1-D (D1/D2/D3 + the full real-browser acceptance walk) merged as
+> PR #27 (`d36fcfd`, 2026-08-26); §1-C (A24) ruled and merged as
+> PR #28 (`d99bbd9`, 2026-08-26). **Correction for the next reader:**
+> this file's §1-D "**CURRENT TASK** / READY TO START" header and the
+> §1-C instruction to "get mads's rulings BEFORE implementing" are
+> historical — the rulings landed 2026-08-25 (all AS RECOMMENDED) and
+> the work shipped. The live audit trail is
+> `docs/todo/TECH_DEBT.md`.
+# (original) # A22-b admin factor-management — handoff (v6, 2026-08-24, PIPELINE GREEN, D ROUND NEXT)
 
 > **§1 progress:** §1-A DONE (`14dc5d2`), §1-B DONE (`e5e68da`, theming fix +
 > `MfaAdminIndexThemeTest` pin + browser proof). Both merged to `develop` as
@@ -22,7 +35,7 @@ know) and §1 (what to do next) first. §2–§5 are reference; §6 is standing
 instructions. **Do not re-do the resolved-defect record (§5).**
 
 **Repo:** `/home/hunter/dev/devcru-jenkins-mfa`
-**Binding spec:** `docs/todo/2026-08-23-A22b-admin-factor-management-spec.md`
+**Binding spec:** `docs/done/2026-08-23-A22b-admin-factor-management-spec.md`
 **House rules:** `AGENTS.md` (BDD doc on every test, README practical-usage
 updated in the same commit, local validation = `mvn clean verify` mirrors CI
 incl. SpotBugs, no PR without mads, commit via `git commit -F <file>` then
