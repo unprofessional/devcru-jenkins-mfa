@@ -1,4 +1,25 @@
-# A24 spec delta — force-enrol view + third verb + first-time MFA setup
+# ✅ DONE — A24 spec delta (implemented + walked; one binding deviation open)
+
+> **STAMPED DONE (2026-08-28) and moved to `docs/done/`.** All 16
+> §9 rulings (AS RECOMMENDED, 2026-08-25) were implemented,
+> seam-pinned (`A24ForceEnrolSeamTest`), partly booted
+> (`MfaAdminIT` leg 7 `setupPendingUserHasClearFactorsRecoveryPath`),
+> walked end-to-end in headful Chromium (`d99bbd9`, terminal marker
+> `ACCEPT_A24_OK`), and merged as PR #28 (merge `9bd4ed9`,
+> 2026-08-26). **Open deviation, honestly stated, NOT glossed:** §7's
+> binding requirement — "walked ... **on `qwen3.8:27b-mtp-q8_0`,
+> stated exactly in the report**" — was not met: the walk's terminal
+> marker self-reports `ox-alpha model via OpenClaw subagent CDP walk`,
+> i.e. a different harness/model. **Deviation
+> OVERRIDE-ACCEPTED by mads (2026-08-28): the work was needed sooner; no qwen
+> re-walk; deviation closed.** The full §7 booted IT matrix
+> (journey-with-restart, guard pins, setup-closed/idempotence, failure
+> honesty, policy/identity edges) LANDED 2026-08-28 in `f631503`
+> (`MfaAdminA24IT`, 5 legs / green); it found and fixed one D16
+> in-memory-rollback defect in `postVerify`. Retained as
+> spec of record for the `forceEnrol` verb, the complement view, and
+> the `/mfa` setup variant.
+# (original) # A24 spec delta — force-enrol view + third verb + first-time MFA setup
 
 > **Status: APPROVED — all 16 §9 decisions ruled AS RECOMMENDED (mads, 2026-08-25). Implementation authorized.**
 > **Branch:** `a24-spec-delta` (off `develop`, post-A22-b/§1-D)

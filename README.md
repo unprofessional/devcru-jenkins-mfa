@@ -73,7 +73,13 @@ through verifying a code mailed to that mailbox; nothing is verified until
 THEY prove it, an admin action can never read as verification, and a
 corrected mailbox invalidates any old-address code. Repeating the same
 mailbox is idempotent; disabled or exempt accounts refuse force-enrol;
-`Clear factors` remains the per-user rollback. The
+`Clear factors` remains the per-user rollback. If the setup verification
+itself cannot persist (e.g. a transient disk failure on the user's
+`config.xml`), the login page answers `persistence_failed` and the setup
+stays pending — the in-memory state is rolled back alongside the
+persistence failure, so no session is admitted that the disk does not
+back (D16: "setup complete" either survives restart or is not claimed).
+The
 admin page **follows your browser's colour setting like Jenkins' own
 pages** — light-preferring browsers get a light roster and light 403 page,
 dark-preferring browsers get the dark ones, and the two renders are
@@ -81,7 +87,7 @@ genuinely different (the page previously claimed both schemes but always
 painted the dark one — corrected in A22-b §1-B, 2026-08-23). The static
 action script is context-rooted, so the buttons also work when Jenkins is
 served beneath a prefix such as `/jenkins`. The spec and rulings:
-[`docs/todo/2026-08-23-A22b-admin-factor-management-spec.md`](docs/todo/2026-08-23-A22b-admin-factor-management-spec.md).
+[`docs/done/2026-08-23-A22b-admin-factor-management-spec.md`](docs/done/2026-08-23-A22b-admin-factor-management-spec.md).
 
 What follows documents the built system as it landed through Task 8.
 
